@@ -68,6 +68,21 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   rejected.
 - Unknown `owner/repo` fails before checkout.
 
+## Credentials (PAT, no GitHub App required)
+
+Two **fine-grained PATs**, stored as **Actions secrets** (not variables). Do not use a classic PAT.
+
+| Where | Secret | PAT is allowed to access | Permissions |
+| --- | --- | --- | --- |
+| **This repo** (`e2e-runner`) | `E2E_TOKEN` | only `think-and-speak-frontend` | Contents **Read**, Commit statuses **Write** |
+| **Frontend** (`think-and-speak-frontend`) | `TNS_E2E_DISPATCH_TOKEN` | only `e2e-runner` | Contents **Read and write** (`repository_dispatch`) |
+
+`mint-token` uses `E2E_TOKEN` first. `E2E_APP_ID` / `E2E_APP_PRIVATE_KEY` are optional and **skipped** when `E2E_TOKEN` is set.
+
+Ordinary org members do not create these tokens. A repo admin sets the secrets once; members then push `release/**` or run **E2E release gate** on the frontend.
+
+GitHub App remains an unused optional path (install only on the target private repo if you ever switch).
+
 ## Org-admin setup (not done by this tree)
 
 1. Create `Seechange-edu/e2e-runner` as **public**.
@@ -75,11 +90,7 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
    - Disable fork pull-request workflows from outside collaborators.
    - Require approval for first-time contributors.
    - Default `GITHUB_TOKEN` permissions: read (not read and write).
-3. GitHub App (preferred) or fine-grained PAT:
-   - Install **only** on `Seechange-edu/think-and-speak-frontend` for now.
-   - Permissions: Contents **Read**, Commit statuses **Write**. Not Contents Write.
-   - Secrets on this repo: `E2E_APP_ID` + `E2E_APP_PRIVATE_KEY`, or fallback
-     `E2E_TOKEN`.
+3. Put `E2E_TOKEN` on this repo (table above). Put `TNS_E2E_DISPATCH_TOKEN` on the frontend.
 4. Journey account secrets (names only — **never put passwords in git**):
 
    | Secret | Used by private `journey.ts` |
@@ -108,8 +119,8 @@ profile, not a copy of the TNS workflow.
 
 1. Add an object to `profiles.json` (allowlist + command + status context +
    concurrency group + probe URL + secrets names). **Code review this file.**
-2. Install the GitHub App on **that** private repo (do not org-wide install).
-3. Add that profile's secrets on this repo.
+2. Extend this repo's `E2E_TOKEN` (or add a new secret) so the PAT can Contents-Read + statuses-Write **that** private repo. Do not grant org-wide access.
+3. Add that profile's account secrets on this repo.
 4. If `runtime` is not `playwright`, add a job in
    `.github/workflows/e2e-run.yml` gated on that runtime. The first release
    only implements `playwright`.

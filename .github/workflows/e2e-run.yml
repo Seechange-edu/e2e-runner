@@ -130,6 +130,7 @@ jobs:
         continue-on-error: true
         run: node scripts/resolve-profile.mjs
 
+      # PAT-first (E2E_TOKEN). App secrets are optional and ignored when PAT is set.
       - name: Mint token
         id: mint
         if: ${{ steps.rp.outputs.write_status == 'true' }}
@@ -267,6 +268,7 @@ jobs:
         working-directory: app
         env:
           CI: true
+          PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
           E2E_RELEASE_REF: ${{ needs.resolve.outputs.ref }}
           LP_PROFILE_EMAIL: ${{ secrets.LP_PROFILE_EMAIL }}
           LP_PROFILE_PASSWORD: ${{ secrets.LP_PROFILE_PASSWORD }}

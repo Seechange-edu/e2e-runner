@@ -1,5 +1,5 @@
 name: Mint GitHub token
-description: GitHub App token if E2E_APP_ID is set, otherwise PAT E2E_TOKEN.
+description: Prefer E2E_TOKEN (fine-grained PAT). GitHub App is optional.
 
 inputs:
   app-id:
@@ -18,15 +18,24 @@ inputs:
 
 outputs:
   token:
-    description: Installation token or PAT
+    description: PAT or App installation token
     value: ${{ steps.pick.outputs.token }}
 
 runs:
   using: composite
   steps:
+    # PAT-first so an unset E2E_APP_ID never invokes create-github-app-token.
+    - name: Use PAT
+      id: pat
+      if: ${{ inputs.pat != '' }}
+      shell: bash
+      env:
+        PAT: ${{ inputs.pat }}
+      run: echo "token=${PAT}" >> "$GITHUB_OUTPUT"
+
     - name: Create GitHub App token
       id: app
-      if: ${{ inputs.app-id != '' }}
+      if: ${{ inputs.pat == '' && inputs.app-id != '' }}
       uses: actions/create-github-app-token@v2
       with:
         app-id: ${{ inputs.app-id }}
@@ -38,15 +47,15 @@ runs:
       id: pick
       shell: bash
       env:
+        PAT_TOKEN: ${{ steps.pat.outputs.token }}
         APP_TOKEN: ${{ steps.app.outputs.token }}
-        PAT: ${{ inputs.pat }}
       run: |
         set -euo pipefail
-        if [ -n "${APP_TOKEN:-}" ]; then
+        if [ -n "${PAT_TOKEN:-}" ]; then
+          echo "token=${PAT_TOKEN}" >> "$GITHUB_OUTPUT"
+        elif [ -n "${APP_TOKEN:-}" ]; then
           echo "token=${APP_TOKEN}" >> "$GITHUB_OUTPUT"
-        elif [ -n "${PAT:-}" ]; then
-          echo "token=${PAT}" >> "$GITHUB_OUTPUT"
         else
-          echo "::error::Set secrets E2E_APP_ID and E2E_APP_PRIVATE_KEY, or E2E_TOKEN"
+          echo "::error::Set repository secret E2E_TOKEN (fine-grained PAT on the target private repo: Contents Read + Commit statuses Write). GitHub App secrets are optional."
           exit 1
         fi
