@@ -6,7 +6,7 @@
       "repo": "think-and-speak-frontend",
       "statusContext": "e2e/release-gate",
       "runtime": "playwright",
-      "container": "mcr.microsoft.com/playwright:v1.57-jammy",
+      "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
       "timeoutMinutes": 75,
       "concurrencyGroup": "e2e-tns-frontend",
       "probeUrl": "https://dev-app-api.thinkandspeak.com/",

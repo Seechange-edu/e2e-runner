@@ -46,7 +46,7 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 release cuts use the affected selector in the private repo.
 
 Playwright image tag must stay aligned with the private `package.json`
-(`@playwright/test ^1.57.0` → `mcr.microsoft.com/playwright:v1.57-jammy`).
+(`@playwright/test ^1.57.0` → `mcr.microsoft.com/playwright:v1.57.0-jammy`).
 Bump the tag in `profiles.json` when the private repo bumps Playwright.
 
 ## Dispatch contract
