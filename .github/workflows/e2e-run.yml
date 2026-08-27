@@ -130,7 +130,7 @@ jobs:
         continue-on-error: true
         run: node scripts/resolve-profile.mjs
 
-      # PAT-first (E2E_TOKEN). App secrets are optional and ignored when PAT is set.
+      # PAT-first (ACTION_TOKEN, same org token as the private repos). App is optional.
       - name: Mint token
         id: mint
         if: ${{ steps.rp.outputs.write_status == 'true' }}
@@ -138,7 +138,7 @@ jobs:
         with:
           app-id: ${{ secrets.E2E_APP_ID }}
           app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
-          pat: ${{ secrets.E2E_TOKEN }}
+          pat: ${{ secrets.ACTION_TOKEN }}
           owner: ${{ steps.rp.outputs.owner }}
           repo: ${{ steps.rp.outputs.repo }}
 
@@ -232,7 +232,7 @@ jobs:
         with:
           app-id: ${{ secrets.E2E_APP_ID }}
           app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
-          pat: ${{ secrets.E2E_TOKEN }}
+          pat: ${{ secrets.ACTION_TOKEN }}
           owner: ${{ needs.resolve.outputs.owner }}
           repo: ${{ needs.resolve.outputs.repo }}
 
@@ -297,7 +297,7 @@ jobs:
         with:
           app-id: ${{ secrets.E2E_APP_ID }}
           app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
-          pat: ${{ secrets.E2E_TOKEN }}
+          pat: ${{ secrets.ACTION_TOKEN }}
           owner: ${{ needs.resolve.outputs.owner }}
           repo: ${{ needs.resolve.outputs.repo }}
 

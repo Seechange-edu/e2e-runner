@@ -2,10 +2,14 @@
 
 Public GitHub Actions executor for **private-repo** end-to-end tests.
 
-This repository has **no product code**. A registered private repo dispatches a
-job here; this repo checks out **that** repo at a given SHA, runs **that**
-repo's test command, and writes a commit status back to **that** SHA. Minutes
-are billed to this public repo, not the private one.
+**Duty:** accept a **registered repository name**, then **read / test / write
+status on that same repository only**. `owner` + `repo` in the payload is the
+target. Checkout, the test command, and commit status all use that pair (plus
+the payload SHA). This runner never tests repo A and reports on repo B, and it
+never checkouts a name that is not in [`profiles.json`](profiles.json).
+
+This repository has **no product code**. Minutes are billed here, not to the
+private repo.
 
 Do not fork this repository and enable Actions. There is no `pull_request`
 trigger on purpose: a fork PR would let anyone drive a checkout of a private
@@ -62,26 +66,33 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
 }
 ```
 
-- `command` / `script` / `context` in the payload are ignored (and must not be
-  sent). Commands and status context live only in `profiles.json`.
+- Target key is **`owner` + `repo`**. It must match a row in `profiles.json`.
+  Optional `profile` must be that row's `id`; it cannot point at a different repo.
+- Checkout, install, test command, and `e2e/release-gate` (or the profile's
+  `statusContext`) all use that same `owner/repo` + `sha`.
+- `command` / `script` / `context` in the payload are ignored. How to run lives
+  only in `profiles.json`.
 - `reason` is `release-push` or `workflow_dispatch`. `backend-release-cut` is
   rejected.
-- Unknown `owner/repo` fails before checkout.
+- Unknown `owner/repo` fails **before** checkout.
 
-## Credentials (PAT, no GitHub App required)
+## Credentials (`ACTION_TOKEN`, no GitHub App)
 
-Two **fine-grained PATs**, stored as **Actions secrets** (not variables). Do not use a classic PAT.
+Both sides reuse the **existing org `ACTION_TOKEN`** (already used by frontend
+`release.yml` / `release-gate.yml`; covers Seechange-edu repositories). Do not
+create `E2E_TOKEN` or `TNS_E2E_DISPATCH_TOKEN`.
 
-| Where | Secret | PAT is allowed to access | Permissions |
-| --- | --- | --- | --- |
-| **This repo** (`e2e-runner`) | `E2E_TOKEN` | only `think-and-speak-frontend` | Contents **Read**, Commit statuses **Write** |
-| **Frontend** (`think-and-speak-frontend`) | `TNS_E2E_DISPATCH_TOKEN` | only `e2e-runner` | Contents **Read and write** (`repository_dispatch`) |
+| Where | Secret | Used for |
+| --- | --- | --- |
+| **Frontend** (already there) | `ACTION_TOKEN` | `repository_dispatch` → this public runner |
+| **This repo** (`e2e-runner`) | `ACTION_TOKEN` | checkout the registered private SHA + write commit status |
 
-`mint-token` uses `E2E_TOKEN` first. `E2E_APP_ID` / `E2E_APP_PRIVATE_KEY` are optional and **skipped** when `E2E_TOKEN` is set.
+Add `ACTION_TOKEN` on e2e-runner as a **repository secret** with the same value
+(or grant this repo an existing org secret of that name). `mint-token` uses it
+first. `E2E_APP_ID` / `E2E_APP_PRIVATE_KEY` are optional and skipped when the PAT is set.
 
-Ordinary org members do not create these tokens. A repo admin sets the secrets once; members then push `release/**` or run **E2E release gate** on the frontend.
-
-GitHub App remains an unused optional path (install only on the target private repo if you ever switch).
+Ordinary org members do not create tokens. After the secret exists here, members
+push `release/**` or run **E2E release gate** on the frontend.
 
 ## Org-admin setup (not done by this tree)
 
@@ -90,7 +101,7 @@ GitHub App remains an unused optional path (install only on the target private r
    - Disable fork pull-request workflows from outside collaborators.
    - Require approval for first-time contributors.
    - Default `GITHUB_TOKEN` permissions: read (not read and write).
-3. Put `E2E_TOKEN` on this repo (table above). Put `TNS_E2E_DISPATCH_TOKEN` on the frontend.
+3. Put secret `ACTION_TOKEN` on this repo (same value as the private repos).
 4. Journey account secrets (names only — **never put passwords in git**):
 
    | Secret | Used by private `journey.ts` |
@@ -119,7 +130,7 @@ profile, not a copy of the TNS workflow.
 
 1. Add an object to `profiles.json` (allowlist + command + status context +
    concurrency group + probe URL + secrets names). **Code review this file.**
-2. Extend this repo's `E2E_TOKEN` (or add a new secret) so the PAT can Contents-Read + statuses-Write **that** private repo. Do not grant org-wide access.
+2. This repo's `ACTION_TOKEN` must be able to Contents-Read + statuses-Write **that** private repo (the org token already can).
 3. Add that profile's account secrets on this repo.
 4. If `runtime` is not `playwright`, add a job in
    `.github/workflows/e2e-run.yml` gated on that runtime. The first release

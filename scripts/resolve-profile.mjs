@@ -3,6 +3,9 @@
  * Validate a dispatch / workflow_dispatch payload against profiles.json.
  * Zero dependencies. Writes GitHub Actions outputs when GITHUB_OUTPUT is set.
  *
+ * Identity is owner/repo: that name is looked up in the allowlist, then
+ * checkout, test command, and commit status all target that same repository.
+ *
  * Env in:
  *   E2E_OWNER, E2E_REPO, E2E_SHA, E2E_REF, E2E_PREVIOUS, E2E_RUN_ALL,
  *   E2E_REASON, E2E_PROFILE, E2E_EVENT_TYPE
@@ -69,35 +72,24 @@ if (eventType === 'backend-release-cut') {
 
 let owner = trim(process.env.E2E_OWNER)
 let repo = trim(process.env.E2E_REPO)
-let profileId = trim(process.env.E2E_PROFILE)
+const profileId = trim(process.env.E2E_PROFILE)
 const shaRaw = trim(process.env.E2E_SHA)
 const ref = trim(process.env.E2E_REF)
 const previous = trim(process.env.E2E_PREVIOUS)
 const runAll = isTrue(process.env.E2E_RUN_ALL)
 const reason = trim(process.env.E2E_REASON)
 
-if (eventType === ALIAS_EVENT && !profileId) {
-  profileId = 'tns-frontend'
+// Alias only names the TNS frontend target. Generic e2e-run must send owner/repo.
+if (eventType === ALIAS_EVENT) {
+  if (!owner) owner = 'Seechange-edu'
+  if (!repo) repo = 'think-and-speak-frontend'
 }
 
-let profile = null
-if (profileId) {
-  profile = profiles.find((p) => p.id === profileId) || null
-  if (!profile) {
-    fail(`unknown profile '${profileId}'`, {
-      writeStatus: SHA_RE.test(shaRaw),
-      owner,
-      repo,
-      sha: SHA_RE.test(shaRaw) ? shaRaw.toLowerCase() : '',
-    })
-  }
-  if (!owner) owner = profile.owner
-  if (!repo) repo = profile.repo
-} else if (owner && repo) {
-  profile = profiles.find((p) => p.owner === owner && p.repo === repo) || null
-} else {
-  fail('payload missing owner/repo (and no profile id to default them)')
+if (!owner || !repo) {
+  fail('payload missing owner/repo — this runner only accepts a registered repository name')
 }
+
+const profile = profiles.find((p) => p.owner === owner && p.repo === repo) || null
 
 const shaValid = SHA_RE.test(shaRaw)
 const sha = shaValid ? shaRaw.toLowerCase() : ''
@@ -112,9 +104,9 @@ if (!profile) {
   })
 }
 
-if (owner !== profile.owner || repo !== profile.repo) {
+if (profileId && profileId !== profile.id) {
   fail(
-    `payload ${owner}/${repo} does not match profile '${profile.id}' (${profile.owner}/${profile.repo})`,
+    `profile '${profileId}' does not match registered repo ${owner}/${repo} (expected '${profile.id}')`,
     {
       writeStatus,
       owner,
