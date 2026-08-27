@@ -1,0 +1,52 @@
+name: Mint GitHub token
+description: GitHub App token if E2E_APP_ID is set, otherwise PAT E2E_TOKEN.
+
+inputs:
+  app-id:
+    required: false
+    default: ''
+  app-private-key:
+    required: false
+    default: ''
+  pat:
+    required: false
+    default: ''
+  owner:
+    required: true
+  repo:
+    required: true
+
+outputs:
+  token:
+    description: Installation token or PAT
+    value: ${{ steps.pick.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create GitHub App token
+      id: app
+      if: ${{ inputs.app-id != '' }}
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repo }}
+
+    - name: Pick token
+      id: pick
+      shell: bash
+      env:
+        APP_TOKEN: ${{ steps.app.outputs.token }}
+        PAT: ${{ inputs.pat }}
+      run: |
+        set -euo pipefail
+        if [ -n "${APP_TOKEN:-}" ]; then
+          echo "token=${APP_TOKEN}" >> "$GITHUB_OUTPUT"
+        elif [ -n "${PAT:-}" ]; then
+          echo "token=${PAT}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::Set secrets E2E_APP_ID and E2E_APP_PRIVATE_KEY, or E2E_TOKEN"
+          exit 1
+        fi

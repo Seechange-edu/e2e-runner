@@ -1,0 +1,334 @@
+name: E2E run
+
+on:
+  repository_dispatch:
+    types: [e2e-run, tns-frontend-e2e]
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: Target owner
+        required: false
+        default: Seechange-edu
+        type: string
+      repo:
+        description: Target repo
+        required: false
+        default: think-and-speak-frontend
+        type: string
+      sha:
+        description: Commit SHA (40 hex)
+        required: true
+        type: string
+      ref:
+        description: Full git ref (e.g. refs/heads/release/v1.2.3)
+        required: true
+        type: string
+      previous:
+        description: Previous v* tag for the affected range
+        required: false
+        type: string
+      runAll:
+        description: Run the full journey (manual only)
+        required: false
+        default: false
+        type: boolean
+      reason:
+        description: Why this run
+        required: false
+        default: workflow_dispatch
+        type: string
+      profile:
+        description: Profile id (optional; inferred from owner/repo)
+        required: false
+        type: string
+
+concurrency:
+  group: e2e-${{ github.event.client_payload.repo || github.event.inputs.repo || 'manual' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      owner: ${{ steps.rp.outputs.owner }}
+      repo: ${{ steps.rp.outputs.repo }}
+      sha: ${{ steps.rp.outputs.sha }}
+      ref: ${{ steps.rp.outputs.ref }}
+      previous: ${{ steps.rp.outputs.previous }}
+      run_all: ${{ steps.rp.outputs.run_all }}
+      reason: ${{ steps.rp.outputs.reason }}
+      profile_id: ${{ steps.rp.outputs.profile_id }}
+      status_context: ${{ steps.rp.outputs.status_context }}
+      runtime: ${{ steps.rp.outputs.runtime }}
+      container: ${{ steps.rp.outputs.container }}
+      timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
+      concurrencyGroup: ${{ steps.rp.outputs.concurrencyGroup }}
+      probe_url: ${{ steps.rp.outputs.probe_url }}
+      install: ${{ steps.rp.outputs.install }}
+      command: ${{ steps.rp.outputs.command }}
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+
+      - name: Collect payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WD_OWNER: ${{ github.event.inputs.owner }}
+          WD_REPO: ${{ github.event.inputs.repo }}
+          WD_SHA: ${{ github.event.inputs.sha }}
+          WD_REF: ${{ github.event.inputs.ref }}
+          WD_PREVIOUS: ${{ github.event.inputs.previous }}
+          WD_RUN_ALL: ${{ github.event.inputs.runAll }}
+          WD_REASON: ${{ github.event.inputs.reason }}
+          WD_PROFILE: ${{ github.event.inputs.profile }}
+          CP_OWNER: ${{ github.event.client_payload.owner }}
+          CP_REPO: ${{ github.event.client_payload.repo }}
+          CP_SHA: ${{ github.event.client_payload.sha }}
+          CP_REF: ${{ github.event.client_payload.ref }}
+          CP_PREVIOUS: ${{ github.event.client_payload.previous }}
+          CP_RUN_ALL: ${{ github.event.client_payload.runAll }}
+          CP_REASON: ${{ github.event.client_payload.reason }}
+          CP_PROFILE: ${{ github.event.client_payload.profile }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            {
+              echo "E2E_OWNER=${WD_OWNER}"
+              echo "E2E_REPO=${WD_REPO}"
+              echo "E2E_SHA=${WD_SHA}"
+              echo "E2E_REF=${WD_REF}"
+              echo "E2E_PREVIOUS=${WD_PREVIOUS}"
+              echo "E2E_RUN_ALL=${WD_RUN_ALL}"
+              echo "E2E_REASON=${WD_REASON}"
+              echo "E2E_PROFILE=${WD_PROFILE}"
+              echo "E2E_EVENT_TYPE=workflow_dispatch"
+            } >> "$GITHUB_ENV"
+          else
+            {
+              echo "E2E_OWNER=${CP_OWNER}"
+              echo "E2E_REPO=${CP_REPO}"
+              echo "E2E_SHA=${CP_SHA}"
+              echo "E2E_REF=${CP_REF}"
+              echo "E2E_PREVIOUS=${CP_PREVIOUS}"
+              echo "E2E_RUN_ALL=${CP_RUN_ALL}"
+              echo "E2E_REASON=${CP_REASON}"
+              echo "E2E_PROFILE=${CP_PROFILE}"
+              echo "E2E_EVENT_TYPE=${EVENT_ACTION}"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve profile
+        id: rp
+        continue-on-error: true
+        run: node scripts/resolve-profile.mjs
+
+      - name: Mint token
+        id: mint
+        if: ${{ steps.rp.outputs.write_status == 'true' }}
+        uses: ./.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.E2E_TOKEN }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+
+      - name: Status error on resolve failure
+        if: ${{ steps.rp.outcome == 'failure' && steps.rp.outputs.write_status == 'true' }}
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+          sha: ${{ steps.rp.outputs.sha }}
+          state: error
+          context: ${{ steps.rp.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: ${{ steps.rp.outputs.error_message }}
+
+      - name: Fail if resolve failed
+        if: ${{ steps.rp.outcome == 'failure' }}
+        run: exit 1
+
+      - name: Status pending
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+          sha: ${{ steps.rp.outputs.sha }}
+          state: pending
+          context: ${{ steps.rp.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: queued on e2e-runner
+
+      - name: Probe API
+        id: probe
+        continue-on-error: true
+        env:
+          PROBE_URL: ${{ steps.rp.outputs.probe_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROBE_URL}" ]; then
+            echo "No probe URL configured"
+            exit 0
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$PROBE_URL" || true)
+          echo "HTTP $code for $PROBE_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            2[0-9][0-9]|3[0-9][0-9]|401|403)
+              echo "API reachable"
+              ;;
+            *)
+              echo "::error::DEV API unreachable (HTTP ${code})"
+              exit 1
+              ;;
+          esac
+
+      - name: Status failure on unreachable API
+        if: ${{ steps.probe.outcome == 'failure' }}
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+          sha: ${{ steps.rp.outputs.sha }}
+          state: failure
+          context: ${{ steps.rp.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: DEV API unreachable
+
+      - name: Fail if API unreachable
+        if: ${{ steps.probe.outcome == 'failure' }}
+        run: exit 1
+
+  run-playwright:
+    needs: resolve
+    if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.resolve.outputs.timeoutMinutes) }}
+    container: ${{ needs.resolve.outputs.container }}
+    concurrency:
+      group: ${{ needs.resolve.outputs.concurrencyGroup }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+        with:
+          path: runner
+
+      - name: Mint token
+        id: mint
+        uses: ./runner/.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.E2E_TOKEN }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.owner }}/${{ needs.resolve.outputs.repo }}
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ steps.mint.outputs.token }}
+          path: app
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Detach at SHA
+        working-directory: app
+        run: git checkout --detach "${{ needs.resolve.outputs.sha }}"
+
+      - name: Enable Yarn 1.22.22
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          yarn --version
+
+      - name: Install
+        working-directory: app
+        env:
+          PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
+        run: ${{ needs.resolve.outputs.install }}
+
+      - name: Run tests
+        working-directory: app
+        env:
+          CI: true
+          E2E_RELEASE_REF: ${{ needs.resolve.outputs.ref }}
+          LP_PROFILE_EMAIL: ${{ secrets.LP_PROFILE_EMAIL }}
+          LP_PROFILE_PASSWORD: ${{ secrets.LP_PROFILE_PASSWORD }}
+          AT_EMAIL: ${{ secrets.AT_EMAIL }}
+          AT_PASSWORD: ${{ secrets.AT_PASSWORD }}
+          AT_UNSUBSCRIBED_EMAIL: ${{ secrets.AT_UNSUBSCRIBED_EMAIL }}
+          AT_UNSUBSCRIBED_PASSWORD: ${{ secrets.AT_UNSUBSCRIBED_PASSWORD }}
+          E2E_STUDENT_PASSWORD: ${{ secrets.E2E_STUDENT_PASSWORD }}
+          E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD }}
+          E2E_STUDENT2_PASSWORD: ${{ secrets.E2E_STUDENT2_PASSWORD }}
+          E2E_DEBATER_PASSWORD: ${{ secrets.E2E_DEBATER_PASSWORD }}
+        run: ${{ needs.resolve.outputs.command }}
+
+  finalize:
+    needs: [resolve, run-playwright]
+    if: ${{ always() && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+
+      - name: Mint token
+        id: mint
+        uses: ./.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.E2E_TOKEN }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+
+      - name: Pick final status
+        id: final
+        env:
+          PW_RESULT: ${{ needs.run-playwright.result }}
+          RUN_ALL: ${{ needs.resolve.outputs.run_all }}
+        run: |
+          set -euo pipefail
+          if [ "$PW_RESULT" = "success" ]; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            if [ "$RUN_ALL" = "true" ]; then
+              echo "description=full journey" >> "$GITHUB_OUTPUT"
+            else
+              echo "description=affected journey" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$PW_RESULT" = "skipped" ]; then
+            echo "state=error" >> "$GITHUB_OUTPUT"
+            echo "description=runtime not implemented" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=e2e-runner failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write final status
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+          sha: ${{ needs.resolve.outputs.sha }}
+          state: ${{ steps.final.outputs.state }}
+          context: ${{ needs.resolve.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: ${{ steps.final.outputs.description }}

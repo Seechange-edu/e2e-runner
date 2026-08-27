@@ -1,0 +1,50 @@
+name: Write commit status
+description: Post a commit status on the target private repository SHA.
+
+inputs:
+  token:
+    description: GitHub App or PAT token that can write commit statuses on the target repo
+    required: true
+  owner:
+    required: true
+  repo:
+    required: true
+  sha:
+    required: true
+  state:
+    description: pending, success, failure, or error
+    required: true
+  context:
+    required: true
+  target-url:
+    required: true
+  description:
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Post commit status
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        OWNER: ${{ inputs.owner }}
+        REPO: ${{ inputs.repo }}
+        SHA: ${{ inputs.sha }}
+        STATE: ${{ inputs.state }}
+        CONTEXT: ${{ inputs.context }}
+        TARGET_URL: ${{ inputs.target-url }}
+        DESCRIPTION: ${{ inputs.description }}
+      run: |
+        set -euo pipefail
+        desc="${DESCRIPTION}"
+        if [ "${#desc}" -gt 140 ]; then
+          desc="${desc:0:140}"
+        fi
+        gh api "repos/${OWNER}/${REPO}/statuses/${SHA}" \
+          -H "Authorization: Bearer ${GH_TOKEN}" \
+          -f state="${STATE}" \
+          -f context="${CONTEXT}" \
+          -f target_url="${TARGET_URL}" \
+          -f description="${desc}"

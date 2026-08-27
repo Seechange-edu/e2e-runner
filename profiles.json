@@ -1,0 +1,31 @@
+{
+  "profiles": [
+    {
+      "id": "tns-frontend",
+      "owner": "Seechange-edu",
+      "repo": "think-and-speak-frontend",
+      "statusContext": "e2e/release-gate",
+      "runtime": "playwright",
+      "container": "mcr.microsoft.com/playwright:v1.57-jammy",
+      "timeoutMinutes": 75,
+      "concurrencyGroup": "e2e-tns-frontend",
+      "probeUrl": "https://dev-app-api.thinkandspeak.com/",
+      "requireReleaseRef": true,
+      "install": "yarn install --frozen-lockfile",
+      "commandAffected": "node scripts/run-affected.mjs --release --built --trace=off",
+      "commandAll": "node scripts/run-affected.mjs --release --built --trace=off --run-all",
+      "secretEnv": [
+        "LP_PROFILE_EMAIL",
+        "LP_PROFILE_PASSWORD",
+        "AT_EMAIL",
+        "AT_PASSWORD",
+        "AT_UNSUBSCRIBED_EMAIL",
+        "AT_UNSUBSCRIBED_PASSWORD",
+        "E2E_STUDENT_PASSWORD",
+        "E2E_TEACHER_PASSWORD",
+        "E2E_STUDENT2_PASSWORD",
+        "E2E_DEBATER_PASSWORD"
+      ]
+    }
+  ]
+}
