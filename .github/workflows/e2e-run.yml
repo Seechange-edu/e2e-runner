@@ -73,6 +73,8 @@ jobs:
       probe_url: ${{ steps.rp.outputs.probe_url }}
       install: ${{ steps.rp.outputs.install }}
       command: ${{ steps.rp.outputs.command }}
+      secret_env: ${{ steps.rp.outputs.secret_env }}
+      profile_env: ${{ steps.rp.outputs.profile_env }}
     steps:
       - name: Checkout runner
         uses: actions/checkout@v4
@@ -189,7 +191,7 @@ jobs:
               echo "API reachable"
               ;;
             *)
-              echo "::error::DEV API unreachable (HTTP ${code})"
+              echo "::error::target API unreachable (HTTP ${code}) at ${PROBE_URL}"
               exit 1
               ;;
           esac
@@ -205,7 +207,7 @@ jobs:
           state: failure
           context: ${{ steps.rp.outputs.status_context }}
           target-url: ${{ env.RUN_URL }}
-          description: DEV API unreachable
+          description: target API unreachable
 
       - name: Fail if API unreachable
         if: ${{ steps.probe.outcome == 'failure' }}
@@ -268,27 +270,57 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
         run: ${{ needs.resolve.outputs.install }}
 
+      # Non-secret, profile-pinned variables (E2E_ENV, shard index). They live
+      # in profiles.json so a second product can target its own environment
+      # without this workflow being edited.
+      - name: Apply profile environment
+        env:
+          PROFILE_ENV: ${{ needs.resolve.outputs.profile_env }}
+        run: |
+          set -euo pipefail
+          export PE="${PROFILE_ENV:-}"
+          if [ -z "$PE" ]; then PE='{}'; fi
+          node -e "const e=JSON.parse(process.env.PE||'{}');for(const [k,v] of Object.entries(e))console.log(k+'='+v)" | tee -a "$GITHUB_ENV"
+
+      # There used to be ten account secrets here — an EMAIL and a PASSWORD per
+      # role. Emails are not secrets (they were already committed in plain text
+      # in the private repo), and per-role passwords bought no isolation: they
+      # all sat in this one store and would leak together. The roster now lives
+      # in the private repo's tests/e2e/accounts.ts, reviewed in a PR, and every
+      # account shares ONE password. Adding a shard is an array entry there, not
+      # an org-admin ticket here. Solution doc §0.5.4.
+      - name: Require the account password
+        env:
+          E2E_ACCOUNT_PASSWORD: ${{ secrets.E2E_ACCOUNT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${E2E_ACCOUNT_PASSWORD:-}" ]; then
+            echo "::error::Repository secret E2E_ACCOUNT_PASSWORD is not set. Every E2E account shares it; the private suite deliberately has no fallback password, so the run would fail deep inside a login step instead of here."
+            exit 1
+          fi
+
       - name: Run tests
         working-directory: app
         env:
           CI: true
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
           E2E_RELEASE_REF: ${{ needs.resolve.outputs.ref }}
-          LP_PROFILE_EMAIL: ${{ secrets.LP_PROFILE_EMAIL }}
-          LP_PROFILE_PASSWORD: ${{ secrets.LP_PROFILE_PASSWORD }}
-          AT_EMAIL: ${{ secrets.AT_EMAIL }}
-          AT_PASSWORD: ${{ secrets.AT_PASSWORD }}
-          AT_UNSUBSCRIBED_EMAIL: ${{ secrets.AT_UNSUBSCRIBED_EMAIL }}
-          AT_UNSUBSCRIBED_PASSWORD: ${{ secrets.AT_UNSUBSCRIBED_PASSWORD }}
-          E2E_STUDENT_PASSWORD: ${{ secrets.E2E_STUDENT_PASSWORD }}
-          E2E_TEACHER_PASSWORD: ${{ secrets.E2E_TEACHER_PASSWORD }}
-          E2E_STUDENT2_PASSWORD: ${{ secrets.E2E_STUDENT2_PASSWORD }}
-          E2E_DEBATER_PASSWORD: ${{ secrets.E2E_DEBATER_PASSWORD }}
+          E2E_ACCOUNT_PASSWORD: ${{ secrets.E2E_ACCOUNT_PASSWORD }}
         run: ${{ needs.resolve.outputs.command }}
 
   finalize:
     needs: [resolve, run-playwright]
-    if: ${{ always() && needs.resolve.result == 'success' }}
+    # Gate on "do we know which SHA to report on", not on "did resolve succeed".
+    # `needs.resolve.result == 'success'` left a hole: resolve can resolve the
+    # profile, write its `pending`, and THEN fail or be cancelled — and this job
+    # was skipped, so nothing ever wrote back and the SHA stayed pending
+    # forever. Reading the output instead covers every case where a status is
+    # both possible and owed. Solution doc §0.5.7 #4c.
+    #
+    # It does NOT cover a resolve cancelled before it produced outputs: the SHA
+    # is genuinely unknown then, and nothing here can report on it. That
+    # residual hole is what the private repo's e2e-gate-watchdog.yml is for.
+    if: ${{ always() && needs.resolve.outputs.sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -322,6 +354,14 @@ jobs:
           elif [ "$PW_RESULT" = "skipped" ]; then
             echo "state=error" >> "$GITHUB_OUTPUT"
             echo "description=runtime not implemented" >> "$GITHUB_OUTPUT"
+          elif [ "$PW_RESULT" = "cancelled" ]; then
+            # Scheduling noise, NOT a test result. Reporting it as `failure`
+            # told the publisher the journey went red when in fact a newer push
+            # took the slot. `error` keeps the tip non-green (this SHA really
+            # was not verified) without accusing the code.
+            # Solution doc §0.5.7 #8.
+            echo "state=error" >> "$GITHUB_OUTPUT"
+            echo "description=superseded — cancelled before finishing" >> "$GITHUB_OUTPUT"
           else
             echo "state=failure" >> "$GITHUB_OUTPUT"
             echo "description=e2e-runner failure" >> "$GITHUB_OUTPUT"

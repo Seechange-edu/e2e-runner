@@ -40,10 +40,20 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 | Status context | `e2e/release-gate` |
 | Command | private `scripts/run-affected.mjs --release --built --trace=off` |
 | Concurrency | `e2e-tns-frontend` (queue, do not cancel) |
-| Probe | `https://dev-app-api.thinkandspeak.com/` |
+| Target environment | **UAT** (`E2E_ENV=uat` from the profile's `env`) |
+| Probe | `https://uat-app-api.thinkandspeak.com/` |
+| Timeout | `timeoutMinutes: 75` — see the note below before changing it |
 
 `runAll=true` is **manual full runs only** (`workflow_dispatch`). Default
 release cuts use the affected selector in the private repo.
+
+### `timeoutMinutes` is paired with a watchdog
+
+The private repo's `e2e-gate-watchdog.yml` reads `timeoutMinutes` out of THIS
+file at runtime and fails any release tip that has been `pending` for longer
+than `timeoutMinutes + 15`. Raising the timeout here therefore moves the
+watchdog too, automatically — that is the point. Do not hard-code a deadline on
+the private side.
 
 Playwright image tag must stay aligned with the private `package.json`
 (`@playwright/test ^1.57.0` → `mcr.microsoft.com/playwright:v1.57.0-jammy`).
@@ -86,6 +96,7 @@ create `E2E_TOKEN` or `TNS_E2E_DISPATCH_TOKEN`.
 | --- | --- | --- |
 | **Frontend** (already there) | `ACTION_TOKEN` | `repository_dispatch` → this public runner |
 | **This repo** (`e2e-runner`) | `ACTION_TOKEN` | checkout the registered private SHA + write commit status |
+| **This repo** (`e2e-runner`) | `E2E_ACCOUNT_PASSWORD` | the one password every E2E account shares |
 
 Add `ACTION_TOKEN` on e2e-runner as a **repository secret** with the same value
 (or grant this repo an existing org secret of that name). `mint-token` uses it
@@ -102,24 +113,32 @@ push `release/**` or run **E2E release gate** on the frontend.
    - Require approval for first-time contributors.
    - Default `GITHUB_TOKEN` permissions: read (not read and write).
 3. Put secret `ACTION_TOKEN` on this repo (same value as the private repos).
-4. Journey account secrets (names only — **never put passwords in git**):
+4. Put secret **`E2E_ACCOUNT_PASSWORD`** on this repo — one password, shared by
+   every E2E account.
 
-   | Secret | Used by private `journey.ts` |
-   | --- | --- |
-   | `LP_PROFILE_EMAIL` / `LP_PROFILE_PASSWORD` | learner-profile account |
-   | `AT_EMAIL` / `AT_PASSWORD` | AI Tutor subscribed account |
-   | `AT_UNSUBSCRIBED_EMAIL` / `AT_UNSUBSCRIBED_PASSWORD` | AI Tutor unsubscribed branch |
-   | `E2E_STUDENT_PASSWORD` | primary student (`testAccount`) — private repo must read this env |
-   | `E2E_TEACHER_PASSWORD` | teacher account — private repo must read this env |
-   | `E2E_STUDENT2_PASSWORD` | second student — private repo must read this env |
-   | `E2E_DEBATER_PASSWORD` | AI Debater account — private repo must read this env |
+   There used to be ten secrets here, an EMAIL and a PASSWORD per role. Both
+   halves of that were wrong. Emails are **not secrets** (they were already
+   committed in plain text in the private repo), and per-role passwords bought
+   no isolation — they all sat in this same store and would leak together. What
+   they did buy was an org-admin ticket for every shard added.
 
-   Do **not** run a real journey from this public repo until those env fallbacks
-   exist in the private repo and secrets are set here. `probe-dev-api.yml` can
-   run first.
+   The roster now lives in the private repo at `tests/e2e/accounts.ts`, reviewed
+   in a PR. Adding a shard is one array entry there; nothing changes here.
 
-5. Run **Probe DEV API** once. Record the HTTP code below. If the runner cannot
-   reach DEV (timeout / 000 / 5xx gateway), stop — do not checkout private code.
+   The private suite has **no fallback password**: if this secret is missing the
+   run fails immediately rather than quietly logging in as `Aa123456`.
+
+   Which accounts have to exist, and what each needs configured (16 menu keys,
+   finished questionnaire, an active journey plan), is
+   `docs/e2e/e2e-release-gate-solution.md` §0.5.4 in the private repo. Short
+   version: **N + 5 accounts, and N = 1 today** — sharding is not implemented.
+
+   Addresses use the neutral prefix `tns-e2e-*`, never a real person's name:
+   **logs here are public** and failure text prints the address.
+
+5. Run **Probe API** once. Record the HTTP code below. If the runner cannot
+   reach the target API (timeout / 000 / 5xx gateway), stop — do not checkout
+   private code.
 
 Recorded probe HTTP code: _(fill after first public run)_
 
@@ -134,7 +153,9 @@ profile, not a copy of the TNS workflow.
 3. Add that profile's account secrets on this repo.
 4. If `runtime` is not `playwright`, add a job in
    `.github/workflows/e2e-run.yml` gated on that runtime. The first release
-   only implements `playwright`.
+   only implements `playwright`. Non-secret, per-profile variables (which
+   environment to build against, shard index) belong in that profile's `env`
+   object, not in the workflow.
 5. That private repo's own dispatcher sends `e2e-run` with **its**
    `owner/repo/sha`. TNS backend must not dispatch the TNS frontend profile.
 

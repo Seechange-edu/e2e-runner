@@ -1,0 +1,55 @@
+name: Probe API
+
+# Target-API reachability only. Does not checkout any private repo.
+# The URL comes from profiles.json (`probeUrl`) so this can never disagree with
+# what e2e-run.yml actually probes — the gate moved DEV -> UAT and a workflow
+# with the environment baked into its name and its script is exactly how those
+# two drift apart. Solution doc §0.5.6.
+# Allowed HTTP codes match e2e-run.yml resolve probe:
+# 2xx / 3xx / 401 / 403 = network reached the API.
+# timeout / 000 / 5xx = unreachable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'profiles.json id to probe (default: the only one)'
+        required: false
+        type: string
+        default: 'tns-frontend'
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+
+      - name: curl the profile's API
+        env:
+          PROFILE_ID: ${{ inputs.profile || 'tns-frontend' }}
+        run: |
+          set -euo pipefail
+          url=$(jq -r --arg id "$PROFILE_ID"             '.profiles[] | select(.id == $id) | .probeUrl // empty' profiles.json)
+          if [ -z "$url" ]; then
+            echo "::error::profile '${PROFILE_ID}' has no probeUrl in profiles.json"
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
+          echo "HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "url=$url" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            2[0-9][0-9]|3[0-9][0-9]|401|403)
+              echo "API reachable"
+              ;;
+            *)
+              echo "::error::API unreachable (HTTP ${code}) at ${url}"
+              exit 1
+              ;;
+          esac

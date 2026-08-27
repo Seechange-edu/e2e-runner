@@ -9,23 +9,18 @@
       "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
       "timeoutMinutes": 75,
       "concurrencyGroup": "e2e-tns-frontend",
-      "probeUrl": "https://dev-app-api.thinkandspeak.com/",
+      "probeUrl": "https://uat-app-api.thinkandspeak.com/",
       "requireReleaseRef": true,
       "install": "yarn install --frozen-lockfile",
       "commandAffected": "node scripts/run-affected.mjs --release --built --trace=off",
       "commandAll": "node scripts/run-affected.mjs --release --built --trace=off --run-all",
       "secretEnv": [
-        "LP_PROFILE_EMAIL",
-        "LP_PROFILE_PASSWORD",
-        "AT_EMAIL",
-        "AT_PASSWORD",
-        "AT_UNSUBSCRIBED_EMAIL",
-        "AT_UNSUBSCRIBED_PASSWORD",
-        "E2E_STUDENT_PASSWORD",
-        "E2E_TEACHER_PASSWORD",
-        "E2E_STUDENT2_PASSWORD",
-        "E2E_DEBATER_PASSWORD"
-      ]
+        "E2E_ACCOUNT_PASSWORD"
+      ],
+      "env": {
+        "E2E_ENV": "uat",
+        "E2E_ACCOUNT_GROUP": "0"
+      }
     }
   ]
 }

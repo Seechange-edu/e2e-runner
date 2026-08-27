@@ -185,6 +185,10 @@ if (!commandBase) {
 
 const command = previous ? `${commandBase} --previous=${previous}` : commandBase
 const secretEnv = Array.isArray(profile.secretEnv) ? profile.secretEnv.join(',') : ''
+// Non-secret, profile-pinned environment for the test step (E2E_ENV, shard
+// index, ...). Kept in profiles.json rather than in the workflow so a second
+// product can point at its own environment without editing e2e-run.yml.
+const profileEnv = JSON.stringify(profile.env && typeof profile.env === 'object' ? profile.env : {})
 
 emit({
   resolve_ok: 'true',
@@ -206,6 +210,7 @@ emit({
   install: profile.install || '',
   command,
   secret_env: secretEnv,
+  profile_env: profileEnv,
   error_message: '',
 })
 
