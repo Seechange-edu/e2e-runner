@@ -217,6 +217,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.resolve.outputs.timeoutMinutes) }}
     container: ${{ needs.resolve.outputs.container }}
+    # Container default shell is `sh` (dash). `set -o pipefail` needs bash.
+    defaults:
+      run:
+        shell: bash
     concurrency:
       group: ${{ needs.resolve.outputs.concurrencyGroup }}
       cancel-in-progress: false
