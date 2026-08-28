@@ -98,6 +98,17 @@ create `E2E_TOKEN` or `TNS_E2E_DISPATCH_TOKEN`.
 | **This repo** (`e2e-runner`) | `ACTION_TOKEN` | checkout the registered private SHA + write commit status |
 | **This repo** (`e2e-runner`) | `E2E_ACCOUNT_PASSWORD` | the one password every E2E account shares |
 
+### Kill switch (`E2E_ENABLED`)
+
+Repository **variable** (Settings → Secrets and variables → Actions → Variables), not a secret:
+
+| Name | Value | Effect |
+| --- | --- | --- |
+| `E2E_ENABLED` | unset / `true` / anything except `false` | Run Playwright, write the real status (`success` / `failure` / `error`) |
+| `E2E_ENABLED` | `false` | Do **not** checkout or test. Still resolve the payload and write `success` on `e2e/release-gate` so a required check does not block the release. Description: `skipped — E2E_ENABLED=false`. |
+
+Unset must run. A missing variable that silently greens the gate is the same hole the private `force` default used to be.
+
 Add `ACTION_TOKEN` on e2e-runner as a **repository secret** with the same value
 (or grant this repo an existing org secret of that name). `mint-token` uses it
 first. `E2E_APP_ID` / `E2E_APP_PRIVATE_KEY` are optional and skipped when the PAT is set.
@@ -115,6 +126,12 @@ push `release/**` or run **E2E release gate** on the frontend.
 3. Put secret `ACTION_TOKEN` on this repo (same value as the private repos).
 4. Put secret **`E2E_ACCOUNT_PASSWORD`** on this repo — one password, shared by
    every E2E account.
+5. Optional kill switch: Actions **variable** `E2E_ENABLED`. Leave unset (or
+   `true`) to run. Set to `false` to skip Playwright and still write `success`
+   on the private SHA. See [Kill switch](#kill-switch-e2e_enabled) above.
+6. Run **Probe API** once. Record the HTTP code below. If the runner cannot
+   reach the target API (timeout / 000 / 5xx gateway), stop — do not checkout
+   private code.
 
    There used to be ten secrets here, an EMAIL and a PASSWORD per role. Both
    halves of that were wrong. Emails are **not secrets** (they were already
@@ -135,10 +152,6 @@ push `release/**` or run **E2E release gate** on the frontend.
 
    Addresses use the neutral prefix `tns-e2e-*`, never a real person's name:
    **logs here are public** and failure text prints the address.
-
-5. Run **Probe API** once. Record the HTTP code below. If the runner cannot
-   reach the target API (timeout / 000 / 5xx gateway), stop — do not checkout
-   private code.
 
 Recorded probe HTTP code: _(fill after first public run)_
 

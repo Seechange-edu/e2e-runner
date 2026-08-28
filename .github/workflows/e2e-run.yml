@@ -75,6 +75,7 @@ jobs:
       command: ${{ steps.rp.outputs.command }}
       secret_env: ${{ steps.rp.outputs.secret_env }}
       profile_env: ${{ steps.rp.outputs.profile_env }}
+      skip_e2e: ${{ steps.gate.outputs.skip_e2e }}
     steps:
       - name: Checkout runner
         uses: actions/checkout@v4
@@ -161,7 +162,26 @@ jobs:
         if: ${{ steps.rp.outcome == 'failure' }}
         run: exit 1
 
+      # Kill switch: repository variable E2E_ENABLED. Only the string `false`
+      # (any case) skips Playwright. Unset / true / anything else RUNS — a
+      # missing variable must not silently green the gate (the private repo's
+      # old `force` default did that).
+      - name: Gate on E2E_ENABLED
+        id: gate
+        env:
+          E2E_ENABLED_RAW: ${{ vars.E2E_ENABLED }}
+        run: |
+          set -euo pipefail
+          v=$(printf '%s' "${E2E_ENABLED_RAW:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          if [ "$v" = "false" ]; then
+            echo "skip_e2e=true" >> "$GITHUB_OUTPUT"
+            echo "E2E_ENABLED=${E2E_ENABLED_RAW} → skip Playwright, report success on the SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Status pending
+        if: ${{ steps.gate.outputs.skip_e2e != 'true' }}
         uses: ./.github/actions/write-status
         with:
           token: ${{ steps.mint.outputs.token }}
@@ -175,6 +195,7 @@ jobs:
 
       - name: Probe API
         id: probe
+        if: ${{ steps.gate.outputs.skip_e2e != 'true' }}
         continue-on-error: true
         env:
           PROBE_URL: ${{ steps.rp.outputs.probe_url }}
@@ -215,7 +236,7 @@ jobs:
 
   run-playwright:
     needs: resolve
-    if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' }}
+    if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' && needs.resolve.outputs.skip_e2e != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.resolve.outputs.timeoutMinutes) }}
     container: ${{ needs.resolve.outputs.container }}
@@ -342,9 +363,13 @@ jobs:
         env:
           PW_RESULT: ${{ needs.run-playwright.result }}
           RUN_ALL: ${{ needs.resolve.outputs.run_all }}
+          SKIP_E2E: ${{ needs.resolve.outputs.skip_e2e }}
         run: |
           set -euo pipefail
-          if [ "$PW_RESULT" = "success" ]; then
+          if [ "$SKIP_E2E" = "true" ]; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            echo "description=skipped — E2E_ENABLED=false" >> "$GITHUB_OUTPUT"
+          elif [ "$PW_RESULT" = "success" ]; then
             echo "state=success" >> "$GITHUB_OUTPUT"
             if [ "$RUN_ALL" = "true" ]; then
               echo "description=full journey" >> "$GITHUB_OUTPUT"
