@@ -9,7 +9,6 @@
       "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
       "timeoutMinutes": 75,
       "concurrencyGroup": "e2e-tns-frontend",
-      "shards": 1,
       "probeUrl": "https://uat-app-api.thinkandspeak.com/",
       "requireReleaseRef": true,
       "install": "yarn install --frozen-lockfile",
@@ -19,7 +18,8 @@
         "E2E_ACCOUNT_PASSWORD"
       ],
       "env": {
-        "E2E_ENV": "uat"
+        "E2E_ENV": "uat",
+        "E2E_ACCOUNT_GROUP": "0"
       }
     }
   ]

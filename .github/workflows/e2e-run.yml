@@ -75,8 +75,6 @@ jobs:
       container: ${{ steps.rp.outputs.container }}
       timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
       concurrencyGroup: ${{ steps.rp.outputs.concurrencyGroup }}
-      shards: ${{ steps.shards.outputs.matrix }}
-      shardCount: ${{ steps.shards.outputs.count }}
       probe_url: ${{ steps.rp.outputs.probe_url }}
       install: ${{ steps.rp.outputs.install }}
       command: ${{ steps.rp.outputs.command }}
@@ -139,44 +137,6 @@ jobs:
         id: rp
         continue-on-error: true
         run: node scripts/resolve-profile.mjs
-
-      # ── the shard matrix ────────────────────────────────────────────────
-      # `shards` lives in profiles.json, not here, so a second product can pick
-      # its own width. It expands to a JSON array of ACCOUNT GROUP indexes:
-      # shard k runs with E2E_ACCOUNT_GROUP=k, and the private repo's
-      # tests/e2e/accounts.ts uses exactly that number to pick its
-      # student / student2 / debater mailboxes and its slice of the suite
-      # (tests/e2e/shards.ts). Shard index and account group are the same
-      # number by definition — giving them two names is how they drift apart.
-      #
-      # 🔴 Raising this past 1 without provisioning group k's accounts in the
-      # CMS makes shard k fail at login. accounts.ts THROWS rather than wrapping
-      # back to group 0, on purpose: a silent wrap means N jobs sharing one
-      # mailbox and overwriting each other's preconditions.
-      #
-      # Falls back to a single shard whenever the profile cannot be read, so a
-      # resolve failure surfaces in "Fail if resolve failed" rather than as an
-      # unparsable matrix expression.
-      - name: Resolve shard matrix
-        id: shards
-        env:
-          PROFILE_ID: ${{ steps.rp.outputs.profile_id }}
-        run: |
-          set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            let n = 1;
-            try {
-              const { profiles } = JSON.parse(fs.readFileSync('profiles.json', 'utf8'));
-              const p = profiles.find((x) => x.id === process.env.PROFILE_ID);
-              n = Math.max(1, Number(p && p.shards) || 1);
-            } catch (e) {
-              console.log('shard matrix falling back to 1: ' + e.message);
-            }
-            const m = JSON.stringify([...Array(n).keys()]);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'matrix=' + m + '\ncount=' + n + '\n');
-            console.log('shards=' + m);
-          "
 
       # PAT-first (ACTION_TOKEN, same org token as the private repos). App is optional.
       - name: Mint token
@@ -282,19 +242,6 @@ jobs:
   run-playwright:
     needs: resolve
     if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' && needs.resolve.outputs.skip_e2e != 'true' }}
-    name: playwright (shard ${{ matrix.shard }})
-    strategy:
-      # 🔴 fail-fast: false, and it is not a preference.
-      #
-      # With the default (true) one red shard CANCELS the others, and
-      # `needs.run-playwright.result` then aggregates to `cancelled` — which
-      # finalize maps to "superseded", i.e. a real test failure reported to the
-      # publisher as scheduling noise. It also throws away the surviving shards'
-      # reports, which is exactly the half you need to tell a product bug from a
-      # shared-account collision.
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.resolve.outputs.shards) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.resolve.outputs.timeoutMinutes) }}
     container: ${{ needs.resolve.outputs.container }}
@@ -303,19 +250,7 @@ jobs:
       run:
         shell: bash
     concurrency:
-      # 🔴 PER SHARD, and this suffix is load-bearing.
-      #
-      # Every matrix leg inherits the same job-level `concurrency` block, so a
-      # single shared group with `cancel-in-progress: false` makes the legs
-      # QUEUE instead of running side by side. The matrix would then be strictly
-      # SLOWER than one job — same total test time, plus install + build paid N
-      # times in series — and would blow the watchdog while looking like a hang.
-      #
-      # Runs are still serialised as a whole by the workflow-level
-      # `concurrency` at the top of this file, and the per-shard group keeps the
-      # property that actually matters: shard k's accounts are only ever driven
-      # by one job at a time.
-      group: ${{ needs.resolve.outputs.concurrencyGroup }}-shard-${{ matrix.shard }}
+      group: ${{ needs.resolve.outputs.concurrencyGroup }}
       cancel-in-progress: false
     steps:
       - name: Checkout runner
@@ -361,7 +296,7 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
         run: ${{ needs.resolve.outputs.install }}
 
-      # Non-secret, profile-pinned variables (E2E_ENV). They live
+      # Non-secret, profile-pinned variables (E2E_ENV, shard index). They live
       # in profiles.json so a second product can target its own environment
       # without this workflow being edited.
       - name: Apply profile environment
@@ -397,12 +332,6 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
           E2E_RELEASE_REF: ${{ needs.resolve.outputs.ref }}
           E2E_ACCOUNT_PASSWORD: ${{ secrets.E2E_ACCOUNT_PASSWORD }}
-          # Step-level env, so it wins over the profile defaults written into
-          # $GITHUB_ENV above. The pair is the whole shard contract: COUNT picks
-          # the partition in tests/e2e/shards.ts, GROUP picks both the slice and
-          # the accounts. One number, one source.
-          E2E_SHARD_COUNT: ${{ needs.resolve.outputs.shardCount }}
-          E2E_ACCOUNT_GROUP: ${{ matrix.shard }}
           # 💸 The paid specs (tests/e2e/burn.ts) are NOT excluded wholesale:
           # run-affected.mjs keeps every one whose module the change actually
           # touched, so a release that modifies a paid path still has to get
@@ -441,39 +370,23 @@ jobs:
           owner: ${{ needs.resolve.outputs.owner }}
           repo: ${{ needs.resolve.outputs.repo }}
 
-      # `needs.run-playwright.result` is the AGGREGATE across the shard matrix:
-      # `failure` if any leg failed, `cancelled` if a leg was cancelled and none
-      # failed, `success` only when every leg succeeded. That is the semantics
-      # this gate wants — one red shard is a red release — and it only holds
-      # because the matrix sets `fail-fast: false`; with fail-fast a red leg
-      # cancels its siblings and the aggregate can arrive here as `cancelled`,
-      # i.e. a real failure wearing the "superseded" label.
-      #
-      # A shard that had nothing to test is NOT a skip: run-affected.mjs exits 0
-      # after printing why, so the leg is a plain success.
       - name: Pick final status
         id: final
         env:
           PW_RESULT: ${{ needs.run-playwright.result }}
           RUN_ALL: ${{ needs.resolve.outputs.run_all }}
           SKIP_E2E: ${{ needs.resolve.outputs.skip_e2e }}
-          SHARD_COUNT: ${{ needs.resolve.outputs.shardCount }}
         run: |
           set -euo pipefail
-          if [ "${SHARD_COUNT:-1}" != "1" ]; then
-            SHARDS=" (${SHARD_COUNT} shards)"
-          else
-            SHARDS=""
-          fi
           if [ "$SKIP_E2E" = "true" ]; then
             echo "state=success" >> "$GITHUB_OUTPUT"
             echo "description=skipped — E2E_ENABLED=false" >> "$GITHUB_OUTPUT"
           elif [ "$PW_RESULT" = "success" ]; then
             echo "state=success" >> "$GITHUB_OUTPUT"
             if [ "$RUN_ALL" = "true" ]; then
-              echo "description=full journey${SHARDS}" >> "$GITHUB_OUTPUT"
+              echo "description=full journey" >> "$GITHUB_OUTPUT"
             else
-              echo "description=affected journey${SHARDS}" >> "$GITHUB_OUTPUT"
+              echo "description=affected journey" >> "$GITHUB_OUTPUT"
             fi
           elif [ "$PW_RESULT" = "skipped" ]; then
             echo "state=error" >> "$GITHUB_OUTPUT"
@@ -488,7 +401,7 @@ jobs:
             echo "description=superseded — cancelled before finishing" >> "$GITHUB_OUTPUT"
           else
             echo "state=failure" >> "$GITHUB_OUTPUT"
-            echo "description=e2e-runner failure${SHARDS}" >> "$GITHUB_OUTPUT"
+            echo "description=e2e-runner failure" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Write final status
