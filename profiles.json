@@ -7,13 +7,13 @@
       "statusContext": "e2e/release-gate",
       "runtime": "playwright",
       "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
-      "timeoutMinutes": 75,
+      "timeoutMinutes": 90,
       "concurrencyGroup": "e2e-tns-frontend",
       "probeUrl": "https://uat-app-api.thinkandspeak.com/",
       "requireReleaseRef": true,
       "install": "yarn install --frozen-lockfile",
-      "commandAffected": "node scripts/run-affected.mjs --release --built --trace=off",
-      "commandAll": "node scripts/run-affected.mjs --release --built --trace=off --run-all",
+      "commandAffected": "node scripts/run-affected.mjs --release --built --trace=retain-on-failure",
+      "commandAll": "node scripts/run-affected.mjs --release --built --trace=retain-on-failure --run-all",
       "secretEnv": [
         "E2E_ACCOUNT_PASSWORD"
       ],

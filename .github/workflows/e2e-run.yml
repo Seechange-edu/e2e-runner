@@ -341,6 +341,30 @@ jobs:
           E2E_BURN: ${{ (github.event.client_payload.burn == true || github.event.inputs.burn == 'true') && '1' || '' }}
         run: ${{ needs.resolve.outputs.command }}
 
+      # 🔴 `if: always()` is the whole point. The report only matters when the
+      # run went red or ran out of time, which are exactly the cases a default
+      # (success-only) step skips. Before this existed the HTML report was
+      # written inside the container and destroyed with it, so a flaky release
+      # gate left nothing to read but Playwright's one-line summary — and an
+      # overrun left not even that.
+      #
+      # Both paths go up: `playwright-report/` is the browsable HTML,
+      # `test-results/` carries the traces and failure screenshots the private
+      # repo's playwright.config.ts retains on failure. `if-no-files-found:
+      # ignore` because a job killed before Playwright started has neither, and
+      # a missing artifact must not turn a real result into a second, unrelated
+      # failure.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ needs.resolve.outputs.sha }}
+          path: |
+            app/playwright-report/
+            app/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   finalize:
     needs: [resolve, run-playwright]
     # Gate on "do we know which SHA to report on", not on "did resolve succeed".
@@ -392,13 +416,21 @@ jobs:
             echo "state=error" >> "$GITHUB_OUTPUT"
             echo "description=runtime not implemented" >> "$GITHUB_OUTPUT"
           elif [ "$PW_RESULT" = "cancelled" ]; then
-            # Scheduling noise, NOT a test result. Reporting it as `failure`
-            # told the publisher the journey went red when in fact a newer push
-            # took the slot. `error` keeps the tip non-green (this SHA really
-            # was not verified) without accusing the code.
+            # NOT a test result either way. Reporting it as `failure` told the
+            # publisher the journey went red when in fact something else took
+            # the slot. `error` keeps the tip non-green (this SHA really was
+            # not verified) without accusing the code.
             # Solution doc §0.5.7 #8.
+            #
+            # 🔴 The text used to say "superseded", flatly. Two different things
+            # land here and this job cannot tell them apart: a newer push
+            # cancelling this one, and the job exceeding `timeout-minutes`.
+            # Asserting the first sent people hunting for a push that did not
+            # exist, while the suite was quietly overrunning its budget. Say
+            # both and let the uploaded artifact decide — a report means the
+            # clock ran out, no artifact at all means it was superseded.
             echo "state=error" >> "$GITHUB_OUTPUT"
-            echo "description=superseded — cancelled before finishing" >> "$GITHUB_OUTPUT"
+            echo "description=superseded or timed out — did not finish" >> "$GITHUB_OUTPUT"
           else
             echo "state=failure" >> "$GITHUB_OUTPUT"
             echo "description=e2e-runner failure" >> "$GITHUB_OUTPUT"
