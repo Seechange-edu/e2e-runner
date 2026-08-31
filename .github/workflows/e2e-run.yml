@@ -74,6 +74,8 @@ jobs:
       runtime: ${{ steps.rp.outputs.runtime }}
       container: ${{ steps.rp.outputs.container }}
       timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
+      shards: ${{ steps.rp.outputs.shards }}
+      shard_matrix: ${{ steps.rp.outputs.shard_matrix }}
       concurrencyGroup: ${{ steps.rp.outputs.concurrencyGroup }}
       probe_url: ${{ steps.rp.outputs.probe_url }}
       install: ${{ steps.rp.outputs.install }}
@@ -249,8 +251,26 @@ jobs:
     defaults:
       run:
         shell: bash
+    # One runner per shard. `shard_matrix` is [0] when the profile does not set
+    # `shards`, so an unsharded profile still gets exactly one job.
+    #
+    # `fail-fast: false` because these are not attempts at the same thing —
+    # they are different thirds of the suite. Cancelling the survivors the
+    # moment one goes red would hide every other failure behind the first one,
+    # and would report the cancelled shards as "did not finish" (see finalize),
+    # which is not what happened to them.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.resolve.outputs.shard_matrix) }}
+    # 🔴 The shard index MUST be in the group name. Job-level concurrency with
+    # `cancel-in-progress: false` does not run same-group jobs side by side, it
+    # QUEUES them — so a single shared group would have executed the three
+    # shards one after another and made this whole change a no-op that also
+    # tripled the checkout cost. The group still keeps two different releases
+    # off the same shard's accounts, which is what it was always for.
     concurrency:
-      group: ${{ needs.resolve.outputs.concurrencyGroup }}
+      group: ${{ needs.resolve.outputs.concurrencyGroup }}-${{ matrix.shard }}
       cancel-in-progress: false
     steps:
       - name: Checkout runner
@@ -332,6 +352,18 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
           E2E_RELEASE_REF: ${{ needs.resolve.outputs.ref }}
           E2E_ACCOUNT_PASSWORD: ${{ secrets.E2E_ACCOUNT_PASSWORD }}
+          # Which slice of the suite, and which learner pair to drive it with.
+          # The two indices are deliberately the SAME number: shard k reads
+          # account group k (tests/e2e/accounts.ts), so "which runner" and "whose
+          # data" never have to be correlated by hand when a spec goes red.
+          #
+          # Set here rather than in profiles.json `env` because only the matrix
+          # knows the index; a step-level `env` also wins over the GITHUB_ENV
+          # the "Apply profile environment" step wrote, so there is one source
+          # of truth for it and it is this one.
+          E2E_ACCOUNT_GROUP: ${{ matrix.shard }}
+          E2E_SHARD_INDEX: ${{ matrix.shard }}
+          E2E_SHARD_TOTAL: ${{ needs.resolve.outputs.shards }}
           # 💸 The paid specs (tests/e2e/burn.ts) are NOT excluded wholesale:
           # run-affected.mjs keeps every one whose module the change actually
           # touched, so a release that modifies a paid path still has to get
@@ -358,7 +390,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-${{ needs.resolve.outputs.sha }}
+          # 🔴 The shard suffix is not cosmetic: upload-artifact@v4 refuses a
+          # second upload under a name that already exists, so without it two
+          # shards finishing together fail the job over an artifact name.
+          name: playwright-report-${{ needs.resolve.outputs.sha }}-shard${{ matrix.shard }}
           path: |
             app/playwright-report/
             app/test-results/

@@ -184,6 +184,23 @@ if (!commandBase) {
 }
 
 const command = previous ? `${commandBase} --previous=${previous}` : commandBase
+/**
+ * How many runners this profile's suite is split across, and the matrix that
+ * spawns them.
+ *
+ * The split itself is the target repo's business (its scripts/e2e-shard.mjs
+ * decides which modules a shard owns); all this side does is say how many and
+ * hand each runner its index. Absent or 1 means one runner and a `[0]` matrix —
+ * the same single job the workflow ran before sharding existed, so a profile
+ * that never sets `shards` is unaffected.
+ *
+ * 🔴 shards must not exceed the account groups in the target's
+ * tests/e2e/accounts.ts, or two runners drive one student mailbox. That check
+ * cannot live here (this repo cannot see that roster), so accounts.ts throws on
+ * it instead, using the E2E_SHARD_TOTAL the workflow passes down.
+ */
+const shards = Math.max(1, Math.floor(Number(profile.shards) || 1))
+const shardMatrix = JSON.stringify(Array.from({ length: shards }, (_, i) => i))
 const secretEnv = Array.isArray(profile.secretEnv) ? profile.secretEnv.join(',') : ''
 // Non-secret, profile-pinned environment for the test step (E2E_ENV, shard
 // index, ...). Kept in profiles.json rather than in the workflow so a second
@@ -205,6 +222,8 @@ emit({
   runtime: profile.runtime,
   container: profile.container || '',
   timeoutMinutes: String(profile.timeoutMinutes || 75),
+  shards: String(shards),
+  shard_matrix: shardMatrix,
   concurrencyGroup: profile.concurrencyGroup,
   probe_url: profile.probeUrl || '',
   install: profile.install || '',
@@ -215,7 +234,7 @@ emit({
 })
 
 console.log(`profile=${profile.id} ${profile.owner}/${profile.repo}@${sha}`)
-console.log(`runtime=${profile.runtime} runAll=${runAll} ref=${ref}`)
+console.log(`runtime=${profile.runtime} runAll=${runAll} ref=${ref} shards=${shards}`)
 if (runAll) console.log('command mode: full journey (--run-all)')
 else console.log('command mode: affected journey')
 process.exit(0)

@@ -8,6 +8,7 @@
       "runtime": "playwright",
       "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
       "timeoutMinutes": 90,
+      "shards": 3,
       "concurrencyGroup": "e2e-tns-frontend",
       "probeUrl": "https://uat-app-api.thinkandspeak.com/",
       "requireReleaseRef": true,
@@ -18,8 +19,7 @@
         "E2E_ACCOUNT_PASSWORD"
       ],
       "env": {
-        "E2E_ENV": "uat",
-        "E2E_ACCOUNT_GROUP": "0"
+        "E2E_ENV": "uat"
       }
     }
   ]
