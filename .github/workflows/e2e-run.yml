@@ -73,6 +73,7 @@ jobs:
       status_context: ${{ steps.rp.outputs.status_context }}
       runtime: ${{ steps.rp.outputs.runtime }}
       container: ${{ steps.rp.outputs.container }}
+      playwright_version: ${{ steps.rp.outputs.playwright_version }}
       timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
       shards: ${{ steps.rp.outputs.shards }}
       shard_matrix: ${{ steps.rp.outputs.shard_matrix }}
@@ -364,6 +365,14 @@ jobs:
           E2E_ACCOUNT_GROUP: ${{ matrix.shard }}
           E2E_SHARD_INDEX: ${{ matrix.shard }}
           E2E_SHARD_TOTAL: ${{ needs.resolve.outputs.shards }}
+          # 🔴 One blob per shard, and the FILE NAME has to say which. The
+          # private repo's playwright.config.ts writes `blob` on CI; its
+          # default output is `blob-report/report.zip` on every runner, because
+          # Playwright only auto-numbers that name when it is driving its OWN
+          # `--shard` — which this suite deliberately does not use. Without
+          # this line the merge job would flatten three identically named files
+          # into one directory and silently keep whichever landed last.
+          PLAYWRIGHT_BLOB_OUTPUT_FILE: blob-report/report-shard${{ matrix.shard }}.zip
           # 💸 The paid specs (tests/e2e/burn.ts) are NOT excluded wholesale:
           # run-affected.mjs keeps every one whose module the change actually
           # touched, so a release that modifies a paid path still has to get
@@ -373,32 +382,142 @@ jobs:
           E2E_BURN: ${{ (github.event.client_payload.burn == true || github.event.inputs.burn == 'true') && '1' || '' }}
         run: ${{ needs.resolve.outputs.command }}
 
-      # 🔴 `if: always()` is the whole point. The report only matters when the
+      # 🔴 `if: always()` is the whole point. The results only matter when the
       # run went red or ran out of time, which are exactly the cases a default
-      # (success-only) step skips. Before this existed the HTML report was
-      # written inside the container and destroyed with it, so a flaky release
-      # gate left nothing to read but Playwright's one-line summary — and an
-      # overrun left not even that.
+      # (success-only) step skips. Before this existed the report was written
+      # inside the container and destroyed with it, so a flaky release gate left
+      # nothing to read but Playwright's one-line summary — and an overrun left
+      # not even that.
       #
-      # Both paths go up: `playwright-report/` is the browsable HTML,
-      # `test-results/` carries the traces and failure screenshots the private
-      # repo's playwright.config.ts retains on failure. `if-no-files-found:
-      # ignore` because a job killed before Playwright started has neither, and
-      # a missing artifact must not turn a real result into a second, unrelated
-      # failure.
-      - name: Upload Playwright report
+      # What goes up is the BLOB, not a browsable report. Each shard's blob is
+      # one zip holding that shard's events and its attachments exactly once;
+      # `merge-report` below folds all of them into a single HTML report for the
+      # whole run, so a human downloads ONE artifact instead of one per shard.
+      #
+      # 🔴 `app/test-results/` is deliberately gone. Under the html reporter it
+      # was a byte-for-byte DUPLICATE of `playwright-report/data/` — Playwright's
+      # reporters/html.js copies every attachment across — so the old artifact
+      # shipped every trace and every 1.3 MB failure screenshot twice. blob does
+      # not produce that directory at all. The one thing lost with it is the
+      # narrow window where Playwright dies so hard it never writes a report:
+      # a job killed by `timeout-minutes` never reaches this step either way,
+      # and a clean `globalTimeout` expiry does write the blob.
+      #
+      # `if-no-files-found: ignore` because a job killed before Playwright
+      # started has no blob, and because a shard that owns no modules exits
+      # before Playwright runs at all (run-affected.mjs). A missing artifact
+      # must not turn a real result into a second, unrelated failure.
+      #
+      # One day of retention: this is an INTERMEDIATE whose only consumer is the
+      # next job, in this same run. It outlives the run only so a broken merge
+      # can be redone by hand from the blobs, instead of by re-running the whole
+      # suite against real accounts and real quota.
+      - name: Upload blob report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # 🔴 The shard suffix is not cosmetic: upload-artifact@v4 refuses a
+          # The shard suffix is not cosmetic: upload-artifact@v4 refuses a
           # second upload under a name that already exists, so without it two
           # shards finishing together fail the job over an artifact name.
-          name: playwright-report-${{ needs.resolve.outputs.sha }}-shard${{ matrix.shard }}
-          path: |
-            app/playwright-report/
-            app/test-results/
+          name: blob-report-${{ needs.resolve.outputs.sha }}-shard${{ matrix.shard }}
+          path: app/blob-report/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # ── ONE report per run, not one per shard ──────────────────────────────────
+  # Sharding multiplied the reporting by three: three artifacts to download,
+  # three reports to open, and the reader's first question became "which third
+  # of the suite was this failure in" — a question nobody should have to ask.
+  # This job answers it by merging the shards' blobs back together.
+  #
+  # It does NOT gate anything. `finalize` writes the commit status and does not
+  # depend on this job, so a bug in the merge can never turn a green suite red;
+  # it shows up as a red merge-report job and nothing else.
+  merge-report:
+    needs: [resolve, run-playwright]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' && needs.resolve.outputs.skip_e2e != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 🔴 No `container:` on purpose. Merging needs Node and the Playwright CLI,
+    # never a browser, and pulling the ~2 GB Playwright image to unzip a few
+    # reports would cost more wall clock than the merge itself.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download blob reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-${{ needs.resolve.outputs.sha }}-shard*
+          path: blobs
+          # Flatten every shard's artifact into ONE directory, which is what
+          # `merge-reports` reads. Safe only because each shard named its file
+          # report-shard<k>.zip (PLAYWRIGHT_BLOB_OUTPUT_FILE above); with the
+          # default name this line would overwrite two reports with the third.
+          merge-multiple: true
+
+      - name: Merge blobs into one HTML report
+        env:
+          PW_VERSION: ${{ needs.resolve.outputs.playwright_version }}
+          # This host has no browsers and needs none. Without it the npx install
+          # would download a browser set just to unzip some reports.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          # Pin where the merged report lands. merge-reports resolves the html
+          # output dir against the nearest playwright.config it can find, and
+          # only falls back to the cwd when there is none — verified locally:
+          # run from inside a repo it writes the report at that REPO's root,
+          # not beside the blobs. This job has no checkout so the fallback
+          # would apply, but the upload paths below depend on this location
+          # and must not rest on the absence of a file.
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A blobs 2>/dev/null || true)" ]; then
+            echo "No blob reports: every shard died before Playwright wrote one, or the whole matrix was skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "${PW_VERSION:-}" ]; then
+            echo "::error::Could not read a Playwright version off the profile container. merge-reports must run the SAME version that wrote the blobs or it fails on a report-format mismatch. Tag the profile's container :v<x.y.z>."
+            exit 1
+          fi
+          ls -l blobs
+          npx --yes "playwright@${PW_VERSION}" merge-reports --reporter html blobs
+          # 🔴 Pin the artifact root. upload-artifact derives it from the least
+          # common ancestor of what it matched, so if `trace/` happened not to
+          # exist (a failure with a screenshot but no trace) the attachments
+          # artifact would unzip as loose sha1 files instead of `data/` +
+          # `trace/` — and would no longer drop into place beside index.html.
+          mkdir -p playwright-report/data playwright-report/trace
+
+      # ── the artifact you actually open ─────────────────────────────────────
+      # index.html is self-contained: Playwright base64-embeds the entire report
+      # — every test, its error, its duration, its stdout — inside it. A couple
+      # of MB, and it answers "what failed and why" without downloading one
+      # trace. This is the tier worth keeping for a fortnight.
+      - name: Upload merged report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ needs.resolve.outputs.sha }}
+          path: playwright-report/index.html
           if-no-files-found: ignore
           retention-days: 14
+
+      # ── the heavy half, kept apart on purpose ──────────────────────────────
+      # Traces and failure screenshots: tens of MB on a red run, and only ever
+      # wanted for the few days somebody is actually debugging it. Unzip this
+      # NEXT TO the report above — both artifacts are rooted at
+      # `playwright-report/` — and index.html's trace links resolve again.
+      - name: Upload merged report attachments
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ needs.resolve.outputs.sha }}
+          path: |
+            playwright-report/data/
+            playwright-report/trace/
+          if-no-files-found: ignore
+          retention-days: 5
 
   finalize:
     needs: [resolve, run-playwright]
@@ -462,8 +581,9 @@ jobs:
             # cancelling this one, and the job exceeding `timeout-minutes`.
             # Asserting the first sent people hunting for a push that did not
             # exist, while the suite was quietly overrunning its budget. Say
-            # both and let the uploaded artifact decide — a report means the
-            # clock ran out, no artifact at all means it was superseded.
+            # both and let the uploaded artifact decide — a blob-report-*
+            # artifact for this shard means the clock ran out, no artifact at
+            # all means it was superseded.
             echo "state=error" >> "$GITHUB_OUTPUT"
             echo "description=superseded or timed out — did not finish" >> "$GITHUB_OUTPUT"
           else

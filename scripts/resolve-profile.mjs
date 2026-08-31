@@ -201,6 +201,23 @@ const command = previous ? `${commandBase} --previous=${previous}` : commandBase
  */
 const shards = Math.max(1, Math.floor(Number(profile.shards) || 1))
 const shardMatrix = JSON.stringify(Array.from({ length: shards }, (_, i) => i))
+/**
+ * The Playwright version the target's suite runs as, read off the profile's
+ * container tag: `mcr.microsoft.com/playwright:v1.57.0-jammy` -> `1.57.0`.
+ *
+ * The merge-report job needs it. `playwright merge-reports` refuses blob
+ * reports written by a different version, and that job runs OUTSIDE the
+ * container on purpose (pulling a ~2 GB browser image just to unzip reports
+ * costs more than the merge), so it cannot read the version off a local
+ * install. Deriving it from the container instead of adding a second field
+ * keeps the two from drifting: the image IS what wrote the blobs.
+ *
+ * Empty when the container carries no `:v<x.y.z>` tag. The workflow turns that
+ * into a readable error rather than guessing a version and failing later on an
+ * unreadable report-format mismatch.
+ */
+const playwrightVersion =
+  String(profile.container || '').match(/:v(\d+\.\d+\.\d+)/)?.[1] || ''
 const secretEnv = Array.isArray(profile.secretEnv) ? profile.secretEnv.join(',') : ''
 // Non-secret, profile-pinned environment for the test step (E2E_ENV, shard
 // index, ...). Kept in profiles.json rather than in the workflow so a second
@@ -221,6 +238,7 @@ emit({
   status_context: profile.statusContext,
   runtime: profile.runtime,
   container: profile.container || '',
+  playwright_version: playwrightVersion,
   timeoutMinutes: String(profile.timeoutMinutes || 75),
   shards: String(shards),
   shard_matrix: shardMatrix,
