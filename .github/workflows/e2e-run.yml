@@ -214,13 +214,37 @@ jobs:
             exit 0
           fi
           code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$PROBE_URL" || true)
-          echo "HTTP $code for $PROBE_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "HTTP $code for $PROBE_URL"
           case "$code" in
             2[0-9][0-9]|3[0-9][0-9]|401|403)
               echo "API reachable"
+              {
+                echo "### API probe: reachable ✅"
+                echo
+                echo "\`GET ${PROBE_URL}\` → **HTTP ${code}**"
+                echo
+                if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+                  echo "> ℹ️ **HTTP ${code} is the expected answer here, not a problem.** The probe sends an"
+                  echo "> unauthenticated request to the API root only to confirm the host is up and"
+                  echo "> serving; the API correctly refuses it. Playwright logs in with the E2E accounts"
+                  echo "> and gets its own tokens, so this ${code} says nothing about the test run."
+                else
+                  echo "> ℹ️ Any 2xx / 3xx / 401 / 403 counts as reachable — the probe only checks the host is up."
+                fi
+                echo
+                echo "The probe would fail the run only on a connection error (HTTP 000), a 404, or a 5xx."
+              } >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
               echo "::error::target API unreachable (HTTP ${code}) at ${PROBE_URL}"
+              {
+                echo "### API probe: unreachable ❌"
+                echo
+                echo "\`GET ${PROBE_URL}\` → **HTTP ${code}** (000 = no connection / timeout after 20 s)"
+                echo
+                echo "> Playwright was not started and the commit status was set to **failure**."
+                echo "> Check that the UAT API is deployed and reachable from GitHub-hosted runners, then re-run."
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
           esac
