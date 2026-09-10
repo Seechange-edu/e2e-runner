@@ -15,8 +15,13 @@ Do not fork this repository and enable Actions. There is no `pull_request`
 trigger on purpose: a fork PR would let anyone drive a checkout of a private
 repo against a live DEV API.
 
-Logs are public. This workflow never uploads artifacts, never prints `.env` /
-tokens, and never records Playwright traces.
+Logs are public. This workflow never prints `.env` / tokens. It **does** keep
+artifacts: traces and failure screenshots are recorded (`--trace=retain-on-failure`)
+and uploaded as `blob-report-<sha>-shard<k>` (1 day, an intermediate),
+`playwright-report-<sha>` (14 days, the self-contained `index.html`) and
+`playwright-traces-<sha>` (5 days, the heavy attachments). Artifacts on a public
+repo are downloadable by anyone, and failure text prints the E2E account address
+— so nothing secret may end up in a trace.
 
 ## How a private SHA points at this run
 
@@ -38,11 +43,13 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 | --- | --- |
 | Event | `e2e-run` (alias `tns-frontend-e2e`) |
 | Status context | `e2e/release-gate` |
-| Command | private `scripts/run-affected.mjs --release --built --trace=off` |
-| Concurrency | `e2e-tns-frontend` (queue, do not cancel) |
+| Install | `yarn install --frozen-lockfile` |
+| Command | private `scripts/run-affected.mjs --release --built --trace=retain-on-failure` (`--run-all` appended when `runAll=true`) |
+| Shards | `shards: 3` — one runner per shard, `fail-fast: false` |
+| Concurrency | `e2e-tns-frontend-<shard>` (queue, do not cancel) — the shard index is in the group, so the three shards run side by side |
 | Target environment | **UAT** (`E2E_ENV=uat` from the profile's `env`) |
 | Probe | `https://uat-app-api.thinkandspeak.com/` |
-| Timeout | `timeoutMinutes: 75` — see the note below before changing it |
+| Timeout | `timeoutMinutes: 90` — see the note below before changing it |
 
 `runAll=true` is **manual full runs only** (`workflow_dispatch`). Default
 release cuts use the affected selector in the private repo.
@@ -71,6 +78,7 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   "ref": "refs/heads/release/v1.2.3",
   "previous": "v1.2.2",
   "runAll": false,
+  "burn": false,
   "reason": "release-push",
   "profile": "tns-frontend"
 }
@@ -84,6 +92,8 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   only in `profiles.json`.
 - `reason` is `release-push` or `workflow_dispatch`. `backend-release-cut` is
   rejected.
+- `burn` is optional and manual-ish: `true` sets `E2E_BURN=1` so the paid specs
+  run for modules this change did NOT touch (💸 full sweep).
 - Unknown `owner/repo` fails **before** checkout.
 
 ## Credentials (`ACTION_TOKEN`, no GitHub App)
@@ -137,7 +147,8 @@ push `release/**` or run **E2E release gate** on the frontend.
    they did buy was an org-admin ticket for every shard added.
 
    The roster now lives in the private repo at `tests/e2e/accounts.ts`, reviewed
-   in a PR. Adding a shard is one array entry there; nothing changes here.
+   in a PR. Adding a shard is one array entry there plus bumping the profile's
+   `shards` here — no new secret either way.
 
    The private suite has **no fallback password**: if this secret is missing the
    run fails immediately rather than quietly logging in as `Aa123456`.
@@ -145,18 +156,24 @@ push `release/**` or run **E2E release gate** on the frontend.
    Which accounts have to exist, and what each needs configured (16 menu keys,
    finished questionnaire, an active journey plan), is
    `docs/e2e/e2e-release-gate-solution.md` §0.5.4 in the private repo. Short
-   version: **N + 5 accounts, and N = 1 today** — sharding is not implemented.
+   version: **2 learner accounts per shard (`student` + `student2`) plus 1 shared
+   `teacher`**; with `shards: 3` that is **7 UAT accounts today**. The shard index
+   and the index into the roster's `groups` array are the same number.
 
-   Addresses use the neutral prefix `tns-e2e-*`, never a real person's name:
-   **logs here are public** and failure text prints the address.
+   New addresses use the neutral prefix `tns-e2e-<slot><group>@` (the roster in
+   place today predates it and reads `e2e-s0@` / `e2e-atx@`), never a real
+   person's name: **logs here are public** and failure text prints the address.
 
 ## Add another private repo
 
 This is a generic executor. A second product (for example CMS) is a new
 profile, not a copy of the TNS workflow.
 
-1. Add an object to `profiles.json` (allowlist + command + status context +
-   concurrency group + probe URL + secrets names). **Code review this file.**
+1. Add an object to `profiles.json`: `id` + `owner`/`repo` (the allowlist) +
+   `statusContext` + `runtime` + `container` + `timeoutMinutes` + `shards` +
+   `concurrencyGroup` + `probeUrl` + `requireReleaseRef` + `install` +
+   `commandAffected`/`commandAll` + `secretEnv` + `env`. **Code review this
+   file.**
 2. This repo's `ACTION_TOKEN` must be able to Contents-Read + statuses-Write **that** private repo (the org token already can).
 3. Add that profile's account secrets on this repo.
 4. If `runtime` is not `playwright`, add a job in
