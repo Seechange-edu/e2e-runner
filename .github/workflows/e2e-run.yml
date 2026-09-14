@@ -20,8 +20,12 @@ on:
         required: true
         type: string
       ref:
-        description: Full git ref (e.g. refs/heads/release/v1.2.3)
+        description: Full git ref (e.g. refs/tags/v1.2.3 or refs/heads/release/v1.2.3)
         required: true
+        type: string
+      tag:
+        description: Release tag this run verifies. Non-empty reports the result back to the source repo, which deploys on success — leave empty for a plain check
+        required: false
         type: string
       previous:
         description: Previous v* tag for the affected range
@@ -67,6 +71,7 @@ jobs:
       sha: ${{ steps.rp.outputs.sha }}
       ref: ${{ steps.rp.outputs.ref }}
       previous: ${{ steps.rp.outputs.previous }}
+      tag: ${{ steps.rp.outputs.tag }}
       run_all: ${{ steps.rp.outputs.run_all }}
       reason: ${{ steps.rp.outputs.reason }}
       profile_id: ${{ steps.rp.outputs.profile_id }}
@@ -99,6 +104,7 @@ jobs:
           WD_RUN_ALL: ${{ github.event.inputs.runAll }}
           WD_REASON: ${{ github.event.inputs.reason }}
           WD_PROFILE: ${{ github.event.inputs.profile }}
+          WD_TAG: ${{ github.event.inputs.tag }}
           CP_OWNER: ${{ github.event.client_payload.owner }}
           CP_REPO: ${{ github.event.client_payload.repo }}
           CP_SHA: ${{ github.event.client_payload.sha }}
@@ -107,6 +113,7 @@ jobs:
           CP_RUN_ALL: ${{ github.event.client_payload.runAll }}
           CP_REASON: ${{ github.event.client_payload.reason }}
           CP_PROFILE: ${{ github.event.client_payload.profile }}
+          CP_TAG: ${{ github.event.client_payload.tag }}
           EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
@@ -120,6 +127,7 @@ jobs:
               echo "E2E_RUN_ALL=${WD_RUN_ALL}"
               echo "E2E_REASON=${WD_REASON}"
               echo "E2E_PROFILE=${WD_PROFILE}"
+              echo "E2E_TAG=${WD_TAG}"
               echo "E2E_EVENT_TYPE=workflow_dispatch"
             } >> "$GITHUB_ENV"
           else
@@ -132,6 +140,7 @@ jobs:
               echo "E2E_RUN_ALL=${CP_RUN_ALL}"
               echo "E2E_REASON=${CP_REASON}"
               echo "E2E_PROFILE=${CP_PROFILE}"
+              echo "E2E_TAG=${CP_TAG}"
               echo "E2E_EVENT_TYPE=${EVENT_ACTION}"
             } >> "$GITHUB_ENV"
           fi
@@ -626,3 +635,36 @@ jobs:
           context: ${{ needs.resolve.outputs.status_context }}
           target-url: ${{ env.RUN_URL }}
           description: ${{ steps.final.outputs.description }}
+
+      # Hand the verdict back to the source repository, which owns what happens
+      # next: deploy on success, Teams + a marker on the release otherwise. Both
+      # outcomes are sent because the Teams webhook lives in the private repo
+      # and must never be put in this public one.
+      #
+      # Only a run that names a release tag reports back. A manual run on a
+      # branch has nothing to deploy, and the receiver re-verifies the tag, the
+      # SHA and the status above before it deploys anything anyway.
+      #
+      # Runs after "Write final status" on purpose: the receiver reads that
+      # status as one of its checks.
+      - name: Report the result to the source repository
+        if: ${{ needs.resolve.outputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          OWNER: ${{ needs.resolve.outputs.owner }}
+          REPO: ${{ needs.resolve.outputs.repo }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          STATE: ${{ steps.final.outputs.state }}
+          DESCRIPTION: ${{ steps.final.outputs.description }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg tag "$TAG" \
+            --arg sha "$SHA" \
+            --arg state "$STATE" \
+            --arg description "$DESCRIPTION" \
+            --arg runUrl "$RUN_URL" \
+            '{event_type: "e2e-result", client_payload: {tag: $tag, sha: $sha, state: $state, description: $description, runUrl: $runUrl}}' \
+            | gh api --method POST "repos/${OWNER}/${REPO}/dispatches" --input -
+          echo "### Reported \`${STATE}\` for \`${TAG}\` back to ${OWNER}/${REPO}" >> "$GITHUB_STEP_SUMMARY"

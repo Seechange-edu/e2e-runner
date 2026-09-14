@@ -20,13 +20,34 @@ tokens, and never records Playwright traces.
 
 ## How a private SHA points at this run
 
-The private repo's `release.yml` (or equivalent) looks at commit status
-`context` from the profile (TNS frontend: `e2e/release-gate`). The status
-`target_url` is this public run:
+This run writes commit status `context` from the profile (TNS frontend:
+`e2e/release-gate`) on the payload SHA. The status `target_url` is this public
+run:
 
 `https://github.com/Seechange-edu/e2e-runner/actions/runs/<id>`
 
 Click the status on the private commit → this run.
+
+## Result callback (`e2e-result`)
+
+When the payload carries a `tag`, `finalize` writes the final status and then
+sends `repository_dispatch` **`e2e-result`** back to the same `owner/repo`:
+
+```json
+{
+  "tag": "v1.2.3",
+  "sha": "<40 hex>",
+  "state": "success | failure | error",
+  "description": "affected journey",
+  "runUrl": "https://github.com/Seechange-edu/e2e-runner/actions/runs/<id>"
+}
+```
+
+Success and failure are both sent: the source repository owns what happens next
+(TNS frontend: deploy on success, Teams + a marker on the release otherwise),
+and its Teams webhook must never live in this public repo. A payload without a
+`tag` (a manual check on a branch) writes the status and sends nothing. The
+receiver re-verifies the tag, the SHA and the status before it deploys.
 
 ## First profile: TNS frontend
 
@@ -38,7 +59,7 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 | --- | --- |
 | Event | `e2e-run` (alias `tns-frontend-e2e`) |
 | Status context | `e2e/release-gate` |
-| Command | private `scripts/run-affected.mjs --release --built --trace=off` |
+| Command | private `scripts/run-affected.mjs --built --trace=retain-on-failure` |
 | Concurrency | `e2e-tns-frontend` (queue, do not cancel) |
 | Target environment | **UAT** (`E2E_ENV=uat` from the profile's `env`) |
 | Probe | `https://uat-app-api.thinkandspeak.com/` |
@@ -46,14 +67,6 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 
 `runAll=true` is **manual full runs only** (`workflow_dispatch`). Default
 release cuts use the affected selector in the private repo.
-
-### `timeoutMinutes` is paired with a watchdog
-
-The private repo's `e2e-gate-watchdog.yml` reads `timeoutMinutes` out of THIS
-file at runtime and fails any release tip that has been `pending` for longer
-than `timeoutMinutes + 15`. Raising the timeout here therefore moves the
-watchdog too, automatically — that is the point. Do not hard-code a deadline on
-the private side.
 
 Playwright image tag must stay aligned with the private `package.json`
 (`@playwright/test ^1.57.0` → `mcr.microsoft.com/playwright:v1.57.0-jammy`).
@@ -68,10 +81,11 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   "owner": "Seechange-edu",
   "repo": "think-and-speak-frontend",
   "sha": "<40 hex>",
-  "ref": "refs/heads/release/v1.2.3",
+  "ref": "refs/tags/v1.2.3",
+  "tag": "v1.2.3",
   "previous": "v1.2.2",
   "runAll": false,
-  "reason": "release-push",
+  "reason": "release-published",
   "profile": "tns-frontend"
 }
 ```
@@ -82,8 +96,11 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   `statusContext`) all use that same `owner/repo` + `sha`.
 - `command` / `script` / `context` in the payload are ignored. How to run lives
   only in `profiles.json`.
-- `reason` is `release-push` or `workflow_dispatch`. `backend-release-cut` is
-  rejected.
+- Any `ref` is accepted — a branch, a release branch or a tag.
+- `tag` is optional. Non-empty = report the result back as `e2e-result` (see
+  above).
+- `reason` is `release-published`, `release-push` or `workflow_dispatch`.
+  `backend-release-cut` is rejected.
 - Unknown `owner/repo` fails **before** checkout.
 
 ## Credentials (`ACTION_TOKEN`, no GitHub App)
@@ -95,7 +112,7 @@ create `E2E_TOKEN` or `TNS_E2E_DISPATCH_TOKEN`.
 | Where | Secret | Used for |
 | --- | --- | --- |
 | **Frontend** (already there) | `ACTION_TOKEN` | `repository_dispatch` → this public runner |
-| **This repo** (`e2e-runner`) | `ACTION_TOKEN` | checkout the registered private SHA + write commit status |
+| **This repo** (`e2e-runner`) | `ACTION_TOKEN` | checkout the registered private SHA + write commit status + dispatch `e2e-result` back |
 | **This repo** (`e2e-runner`) | `E2E_ACCOUNT_PASSWORD` | the one password every E2E account shares |
 
 ### Kill switch (`E2E_ENABLED`)
@@ -105,7 +122,7 @@ Repository **variable** (Settings → Secrets and variables → Actions → Vari
 | Name | Value | Effect |
 | --- | --- | --- |
 | `E2E_ENABLED` | unset / `true` / anything except `false` | Run Playwright, write the real status (`success` / `failure` / `error`) |
-| `E2E_ENABLED` | `false` | Do **not** checkout or test. Still resolve the payload and write `success` on `e2e/release-gate` so a required check does not block the release. Description: `skipped — E2E_ENABLED=false`. |
+| `E2E_ENABLED` | `false` | Do **not** checkout or test. Still resolve the payload and write `success` on `e2e/release-gate` so a required check does not block the release. Description: `skipped — E2E_ENABLED=false`. A run with a `tag` also reports `success` back, so **that release deploys untested**. |
 
 Unset must run. A missing variable that silently greens the gate is the same hole the private `force` default used to be.
 
@@ -114,7 +131,7 @@ Add `ACTION_TOKEN` on e2e-runner as a **repository secret** with the same value
 first. `E2E_APP_ID` / `E2E_APP_PRIVATE_KEY` are optional and skipped when the PAT is set.
 
 Ordinary org members do not create tokens. After the secret exists here, members
-push `release/**` or run **E2E release gate** on the frontend.
+publish a release or run **E2E release gate** on the frontend.
 
 ## Org-admin setup (not done by this tree)
 
@@ -173,8 +190,9 @@ profile, not a copy of the TNS workflow.
 E2E_OWNER=Seechange-edu \
 E2E_REPO=think-and-speak-frontend \
 E2E_SHA=0123456789abcdef0123456789abcdef01234567 \
-E2E_REF=refs/heads/release/v1.0.0 \
-E2E_REASON=release-push \
+E2E_REF=refs/tags/v1.0.0 \
+E2E_TAG=v1.0.0 \
+E2E_REASON=release-published \
 node scripts/resolve-profile.mjs
 ```
 

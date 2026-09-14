@@ -8,7 +8,10 @@
  *
  * Env in:
  *   E2E_OWNER, E2E_REPO, E2E_SHA, E2E_REF, E2E_PREVIOUS, E2E_RUN_ALL,
- *   E2E_REASON, E2E_PROFILE, E2E_EVENT_TYPE
+ *   E2E_REASON, E2E_PROFILE, E2E_EVENT_TYPE, E2E_TAG
+ *
+ * Any ref is accepted. Whether a green run may deploy is decided by the source
+ * repository when the result comes back (see `tag` below), not here.
  */
 import { readFileSync, appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -17,8 +20,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SHA_RE = /^[0-9a-f]{40}$/i
 const PREVIOUS_RE = /^[A-Za-z0-9._/-]+$/
-const RELEASE_REF_PREFIX = 'refs/heads/release/'
-const ALLOWED_REASONS = new Set(['release-push', 'workflow_dispatch', ''])
+const ALLOWED_REASONS = new Set(['release-published', 'release-push', 'workflow_dispatch', ''])
 const ALIAS_EVENT = 'tns-frontend-e2e'
 const FALLBACK_CONTEXT = 'e2e/release-gate'
 
@@ -59,6 +61,9 @@ function fail(message, extra = {}) {
     owner: extra.owner || '',
     repo: extra.repo || '',
     sha: extra.sha || '',
+    // Emitted even on failure: finalize reports back whenever a tag is known, so
+    // a rejected payload for a release still reaches the source as an error.
+    tag: PREVIOUS_RE.test(trim(process.env.E2E_TAG)) ? trim(process.env.E2E_TAG) : '',
     status_context: extra.statusContext || FALLBACK_CONTEXT,
     error_message: message,
   })
@@ -78,6 +83,12 @@ const ref = trim(process.env.E2E_REF)
 const previous = trim(process.env.E2E_PREVIOUS)
 const runAll = isTrue(process.env.E2E_RUN_ALL)
 const reason = trim(process.env.E2E_REASON)
+/**
+ * The release tag this run verifies, when it verifies one. Non-empty makes
+ * finalize dispatch `e2e-result` back to the source repository, which deploys
+ * on success. Empty (a manual run on a branch) reports a status and nothing more.
+ */
+const tag = trim(process.env.E2E_TAG)
 
 // Alias only names the TNS frontend target. Generic e2e-run must send owner/repo.
 if (eventType === ALIAS_EVENT) {
@@ -136,8 +147,8 @@ if (!ref) {
   })
 }
 
-if (profile.requireReleaseRef && !ref.startsWith(RELEASE_REF_PREFIX) && !runAll) {
-  fail(`ref must start with ${RELEASE_REF_PREFIX} (runAll=true is the manual exception)`, {
+if (reason && !ALLOWED_REASONS.has(reason)) {
+  fail(`reason '${reason}' is not allowed (expected release-published | release-push | workflow_dispatch)`, {
     writeStatus: true,
     owner,
     repo,
@@ -146,14 +157,8 @@ if (profile.requireReleaseRef && !ref.startsWith(RELEASE_REF_PREFIX) && !runAll)
   })
 }
 
-if (runAll && !ref.startsWith(RELEASE_REF_PREFIX)) {
-  console.log(
-    `::warning::runAll=true with non-release ref '${ref}' — allowed for manual full runs only`,
-  )
-}
-
-if (reason && !ALLOWED_REASONS.has(reason)) {
-  fail(`reason '${reason}' is not allowed (expected release-push | workflow_dispatch)`, {
+if (tag && !PREVIOUS_RE.test(tag)) {
+  fail('tag contains characters that are not allowed in a tag', {
     writeStatus: true,
     owner,
     repo,
@@ -232,6 +237,7 @@ emit({
   sha,
   ref,
   previous,
+  tag,
   run_all: runAll ? 'true' : 'false',
   reason,
   profile_id: profile.id,
@@ -252,7 +258,7 @@ emit({
 })
 
 console.log(`profile=${profile.id} ${profile.owner}/${profile.repo}@${sha}`)
-console.log(`runtime=${profile.runtime} runAll=${runAll} ref=${ref} shards=${shards}`)
+console.log(`runtime=${profile.runtime} runAll=${runAll} ref=${ref} tag=${tag || '-'} shards=${shards}`)
 if (runAll) console.log('command mode: full journey (--run-all)')
 else console.log('command mode: affected journey')
 process.exit(0)
