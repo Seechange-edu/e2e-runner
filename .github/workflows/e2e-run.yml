@@ -20,15 +20,15 @@ on:
         required: true
         type: string
       ref:
-        description: Full git ref (e.g. refs/tags/v1.2.3 or refs/heads/release/v1.2.3)
+        description: Git ref (branch or tag)
         required: true
         type: string
       tag:
-        description: Release tag this run verifies. Non-empty reports the result back to the source repo, which deploys on success — leave empty for a plain check
+        description: Release tag; set = report back, may deploy
         required: false
         type: string
       previous:
-        description: Previous v* tag for the affected range
+        description: Previous tag for the affected range
         required: false
         type: string
       runAll:
@@ -42,7 +42,7 @@ on:
         default: workflow_dispatch
         type: string
       burn:
-        description: "Also run paid specs for modules this change did NOT touch (full 💸 sweep)"
+        description: Also run all paid specs
         required: false
         default: false
         type: boolean
