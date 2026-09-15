@@ -81,10 +81,12 @@ jobs:
       playwright_version: ${{ steps.rp.outputs.playwright_version }}
       timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
       shards: ${{ steps.rp.outputs.shards }}
-      shard_matrix: ${{ steps.rp.outputs.shard_matrix }}
+      # The plan narrows it to the shards with work; without one, every shard.
+      shard_matrix: ${{ steps.plan.outputs.shard_matrix || steps.rp.outputs.shard_matrix }}
       concurrencyGroup: ${{ steps.rp.outputs.concurrencyGroup }}
       probe_url: ${{ steps.rp.outputs.probe_url }}
       install: ${{ steps.rp.outputs.install }}
+      yarn_cache: ${{ steps.rp.outputs.yarn_cache }}
       command: ${{ steps.rp.outputs.command }}
       secret_env: ${{ steps.rp.outputs.secret_env }}
       profile_env: ${{ steps.rp.outputs.profile_env }}
@@ -275,6 +277,57 @@ jobs:
         if: ${{ steps.probe.outcome == 'failure' }}
         run: exit 1
 
+      # ── which shards have anything to run ────────────────────────────────
+      # A shard that owns no selected module used to start a container, check
+      # out, `yarn install` and only then find out it had nothing to do — about
+      # 2.5 minutes each, on most small releases for two of the three shards.
+      # The profile's `plan` answers that here, from a checkout alone (it needs
+      # git and node, no dependencies), so those shards are never started.
+      #
+      # 🔴 It may only ever narrow. A plan that fails, prints nothing, or prints
+      # anything but a non-empty list of valid indices falls back to every shard:
+      # running a shard for nothing costs minutes, skipping one with work would
+      # skip tests.
+      - name: Checkout target for the shard plan
+        if: ${{ steps.gate.outputs.skip_e2e != 'true' && steps.rp.outputs.plan_command != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.rp.outputs.owner }}/${{ steps.rp.outputs.repo }}
+          ref: ${{ steps.rp.outputs.sha }}
+          token: ${{ steps.mint.outputs.token }}
+          path: app
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Plan which shards have work
+        id: plan
+        if: ${{ steps.gate.outputs.skip_e2e != 'true' && steps.rp.outputs.plan_command != '' }}
+        continue-on-error: true
+        working-directory: app
+        env:
+          CI: true
+          E2E_RELEASE_REF: ${{ steps.rp.outputs.ref }}
+          E2E_SHARD_TOTAL: ${{ steps.rp.outputs.shards }}
+          PLAN: ${{ steps.rp.outputs.plan_command }}
+        run: |
+          set -uo pipefail
+          # A target commit from before the plan existed ignores the flag and
+          # heads for a real test run; 60 s and no stdin keep that from eating
+          # the job, and its output fails the check below.
+          if ! OUT=$(timeout 60 bash -c "$PLAN" </dev/null); then
+            echo "::warning::The shard plan failed or timed out; starting every shard."
+            exit 0
+          fi
+          if ! printf '%s' "$OUT" | jq -e --argjson total "$E2E_SHARD_TOTAL" \
+              'type == "array" and length > 0 and all(.[]; type == "number" and . >= 0 and . < $total)' >/dev/null 2>&1; then
+            echo "::warning::The shard plan printed '${OUT}', not a list of shard indices; starting every shard."
+            exit 0
+          fi
+          MATRIX=$(printf '%s' "$OUT" | jq -c 'unique')
+          echo "shard_matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "### Shards with work: ${MATRIX} of ${E2E_SHARD_TOTAL}" >> "$GITHUB_STEP_SUMMARY"
+
   run-playwright:
     needs: resolve
     if: ${{ needs.resolve.result == 'success' && needs.resolve.outputs.runtime == 'playwright' && needs.resolve.outputs.skip_e2e != 'true' }}
@@ -343,6 +396,35 @@ jobs:
           corepack enable
           corepack prepare yarn@1.22.22 --activate
           yarn --version
+
+      # 💰 Of the ~100 s `yarn install` takes, ~65 s is downloading packages.
+      # Cache yarn's download cache, keyed by the profile and the lockfile's hash;
+      # a changed lockfile still restores the newest cache and fetches only what
+      # is missing. Linking into node_modules is not cached on purpose: it would
+      # have to key on patches/ and postinstall output too, and a stale hit there
+      # fails in ways that do not point at the cache.
+      - name: Locate the yarn cache
+        id: yarn-cache
+        if: ${{ needs.resolve.outputs.yarn_cache != '' }}
+        working-directory: app
+        env:
+          LOCKFILE: ${{ needs.resolve.outputs.yarn_cache }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$LOCKFILE" ]; then
+            echo "::warning::${LOCKFILE} not found in the target; installing without a cache."
+            exit 0
+          fi
+          echo "dir=$(yarn cache dir)" >> "$GITHUB_OUTPUT"
+          echo "hash=$(sha256sum "$LOCKFILE" | cut -c1-32)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the yarn cache
+        if: ${{ steps.yarn-cache.outputs.dir != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.yarn-cache.outputs.dir }}
+          key: yarn-${{ needs.resolve.outputs.profile_id }}-${{ steps.yarn-cache.outputs.hash }}
+          restore-keys: yarn-${{ needs.resolve.outputs.profile_id }}-
 
       - name: Install
         working-directory: app

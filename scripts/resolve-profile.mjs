@@ -190,6 +190,29 @@ if (!commandBase) {
 
 const command = previous ? `${commandBase} --previous=${previous}` : commandBase
 /**
+ * Optional `plan`: a command run in the resolve job, against the target
+ * checkout, that prints the JSON list of shard indices with anything to run.
+ * It gets the same --run-all / --previous as the test command, so the plan and
+ * the shards decide from the same inputs. Absent → every shard starts, as
+ * before.
+ */
+const planBase = profile.plan ? (runAll ? `${profile.plan} --run-all` : profile.plan) : ''
+const planCommand = planBase && previous ? `${planBase} --previous=${previous}` : planBase
+/**
+ * Optional `yarnCache`: the lockfile (relative to the target checkout) whose
+ * hash keys a cache of yarn's download cache. Absent → no cache.
+ */
+const yarnCache = typeof profile.yarnCache === 'string' ? profile.yarnCache.trim() : ''
+if (yarnCache && !/^[A-Za-z0-9._/-]+$/.test(yarnCache)) {
+  fail(`profile '${profile.id}' yarnCache must be a plain relative path`, {
+    writeStatus: true,
+    owner,
+    repo,
+    sha,
+    statusContext: profile.statusContext,
+  })
+}
+/**
  * How many runners this profile's suite is split across, and the matrix that
  * spawns them.
  *
@@ -252,6 +275,8 @@ emit({
   probe_url: profile.probeUrl || '',
   install: profile.install || '',
   command,
+  plan_command: planCommand,
+  yarn_cache: yarnCache,
   secret_env: secretEnv,
   profile_env: profileEnv,
   error_message: '',

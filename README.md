@@ -60,6 +60,8 @@ Think & Speak backend / ai-tutor do not trigger E2E (gate spec §5.7 deferred).
 | Event | `e2e-run` (alias `tns-frontend-e2e`) |
 | Status context | `e2e/release-gate` |
 | Command | private `scripts/run-affected.mjs --built --trace=retain-on-failure` |
+| Plan | `node scripts/run-affected.mjs --plan` — only shards with work are started (see below) |
+| Yarn cache | keyed by `yarn.lock` (see below) |
 | Concurrency | `e2e-tns-frontend` (queue, do not cancel) |
 | Target environment | **UAT** (`E2E_ENV=uat` from the profile's `env`) |
 | Probe | `https://uat-app-api.thinkandspeak.com/` |
@@ -166,6 +168,13 @@ publish a release or run **E2E release gate** on the frontend.
 
    Addresses use the neutral prefix `tns-e2e-*`, never a real person's name:
    **logs here are public** and failure text prints the address.
+
+## Optional profile fields
+
+| Field | What it does |
+| --- | --- |
+| `plan` | Run in the `resolve` job against a checkout of the target SHA, with the same `--run-all` / `--previous` as the test command and `E2E_SHARD_TOTAL` set. It must print, on stdout, a JSON list of the shard indices that have anything to run (e.g. `[0]`); only those shards start. It may only narrow: if it fails, times out (60 s), or prints anything else, every shard starts. Absent → every shard starts. |
+| `yarnCache` | Lockfile path inside the target. Its hash keys an `actions/cache` of yarn's download cache in each shard, so `install` mostly skips downloading. The cache is only saved by a shard that succeeds; the first run after a lockfile change fetches what is new. Absent → no cache. |
 
 ## Add another private repo
 
