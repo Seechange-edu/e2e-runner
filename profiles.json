@@ -21,6 +21,16 @@
       ],
       "env": {
         "E2E_ENV": "uat"
+      },
+      "manual": {
+        "statusContext": "manual/user-manual",
+        "timeoutMinutes": 60,
+        "envFile": "env/prod.env",
+        "command": "yarn manual",
+        "build": "node scripts/build-manual.mjs --version",
+        "asset": "manual-output/ThinkAndSpeak-User-Manual-{tag}.pdf",
+        "deployRepo": "Seechange-edu/act-speaking-exercise-frontend",
+        "deployPrefix": "think-and-speak-frontend/"
       }
     }
   ]

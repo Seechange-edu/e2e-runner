@@ -1,0 +1,292 @@
+name: User manual
+
+# Regenerates a private repository's end-user manual against PROD and attaches
+# the PDF to that repository's GitHub Release for the tag. Dispatched by the
+# private repo after a PROD deploy (think-and-speak-frontend: PROD_k8s.yaml).
+#
+# A separate workflow on purpose, not a mode of e2e-run.yml: that one's
+# finalize sends `e2e-result`, which DEPLOYS PROD, and shares its concurrency
+# group with the release gate.
+#
+# 🔴🔴 client_payload.password is the manual account's PROD password, and this
+# repository's logs are PUBLIC. It is not a secret here, so GitHub does not mask
+# it on its own. Rules for every edit to this file:
+#   - only the "Generate the manual" step reads it, from $GITHUB_EVENT_PATH,
+#     and masks it before anything else;
+#   - never put client_payload in `env:`, `${{ }}` inside `run:`, an output,
+#     `toJson(github.event)`, or any debug print — the value would be public
+#     for good.
+# No workflow_dispatch: its inputs are shown in the UI.
+on:
+  repository_dispatch:
+    types: [manual-run]
+
+# One manual at a time per repository; a newer pending run replaces an older
+# pending one, which is the tag worth documenting anyway.
+concurrency:
+  group: manual-${{ github.event.client_payload.repo || 'unknown' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    outputs:
+      owner: ${{ steps.rp.outputs.owner }}
+      repo: ${{ steps.rp.outputs.repo }}
+      sha: ${{ steps.rp.outputs.sha }}
+      tag: ${{ steps.rp.outputs.tag }}
+      profile_id: ${{ steps.rp.outputs.profile_id }}
+      container: ${{ steps.rp.outputs.container }}
+      install: ${{ steps.rp.outputs.install }}
+      yarn_cache: ${{ steps.rp.outputs.yarn_cache }}
+      status_context: ${{ steps.rp.outputs.status_context }}
+      timeoutMinutes: ${{ steps.rp.outputs.timeoutMinutes }}
+      env_file: ${{ steps.rp.outputs.env_file }}
+      command: ${{ steps.rp.outputs.command }}
+      build: ${{ steps.rp.outputs.build }}
+      asset: ${{ steps.rp.outputs.asset }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the event file itself and emits only validated, non-secret fields.
+      - name: Resolve payload
+        id: rp
+        run: node scripts/resolve-manual.mjs
+
+      - name: Mint token
+        id: mint
+        uses: ./.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.ACTION_TOKEN }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+
+      - name: Status pending
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ steps.rp.outputs.owner }}
+          repo: ${{ steps.rp.outputs.repo }}
+          sha: ${{ steps.rp.outputs.sha }}
+          state: pending
+          context: ${{ steps.rp.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: waiting for PROD to serve ${{ steps.rp.outputs.tag }}
+
+      # The private repo's deploy only hands the tag to the public deploy
+      # repository, which builds and starts the container afterwards. Shoot the
+      # manual once that run is green, or it documents the previous build.
+      # The deploy repo is public, so the workflow token can read its runs.
+      - name: Wait for the PROD deploy
+        if: ${{ steps.rp.outputs.deploy_repo != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_REPO: ${{ steps.rp.outputs.deploy_repo }}
+          BRANCH: ${{ steps.rp.outputs.deploy_prefix }}${{ steps.rp.outputs.tag }}/
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 45 * 60 ))
+          while :; do
+            # The newest deploy of this tag (a redeploy gets a new timestamp).
+            # A failed call (502, rate limit) is retried, not the end of the wait.
+            state=$(gh api "repos/${DEPLOY_REPO}/actions/runs?event=release&per_page=50" \
+              --jq "[.workflow_runs[] | select((.head_branch // \"\") | startswith(\"${BRANCH}\"))]
+                    | sort_by(.run_started_at) | last
+                    | if . == null then \"none\" else .status + \"/\" + (.conclusion // \"\") end") \
+              || state="api-error"
+            echo "$(date -u +%H:%M:%S) ${BRANCH}* → ${state}"
+            case "$state" in
+              completed/success) exit 0 ;;
+              completed/*) echo "::error::The PROD deploy of ${BRANCH} in ${DEPLOY_REPO} did not succeed (${state})."; exit 1 ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::No green PROD deploy of ${BRANCH} in ${DEPLOY_REPO} within 45 minutes."
+              exit 1
+            fi
+            sleep 30
+          done
+
+  manual:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.resolve.outputs.timeoutMinutes) }}
+    container: ${{ needs.resolve.outputs.container }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      generated: ${{ steps.gen.outcome }}
+      uploaded: ${{ steps.upload.outcome }}
+    steps:
+      - name: Checkout runner
+        uses: actions/checkout@v4
+        with:
+          path: runner
+
+      - name: Mint token
+        id: mint
+        uses: ./runner/.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.ACTION_TOKEN }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.owner }}/${{ needs.resolve.outputs.repo }}
+          ref: ${{ needs.resolve.outputs.sha }}
+          token: ${{ steps.mint.outputs.token }}
+          path: app
+          persist-credentials: false
+
+      - name: Enable Yarn 1.22.22
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          node -v
+          yarn --version
+
+      # Same cache key as e2e-run.yml: one download cache per profile.
+      - name: Locate the yarn cache
+        id: yarn-cache
+        if: ${{ needs.resolve.outputs.yarn_cache != '' }}
+        working-directory: app
+        env:
+          LOCKFILE: ${{ needs.resolve.outputs.yarn_cache }}
+        run: |
+          set -euo pipefail
+          [ -f "$LOCKFILE" ] || exit 0
+          echo "dir=$(yarn cache dir)" >> "$GITHUB_OUTPUT"
+          echo "hash=$(sha256sum "$LOCKFILE" | cut -c1-32)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the yarn cache
+        if: ${{ steps.yarn-cache.outputs.dir != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.yarn-cache.outputs.dir }}
+          key: yarn-${{ needs.resolve.outputs.profile_id }}-${{ steps.yarn-cache.outputs.hash }}
+          restore-keys: yarn-${{ needs.resolve.outputs.profile_id }}-
+
+      - name: Install
+        working-directory: app
+        env:
+          PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
+        run: ${{ needs.resolve.outputs.install }}
+
+      # continue-on-error: a module that fails (e.g. Word List on an account
+      # with no practice history) writes no README and is left out of the PDF;
+      # the rest still ship. finalize reports the failure on the commit.
+      #
+      # 🔴 The ONLY step that touches the password: read from the event file,
+      # masked before any output, exported to this step's process only.
+      # Never `set -x` here.
+      - name: Generate the manual
+        id: gen
+        continue-on-error: true
+        working-directory: app
+        env:
+          CI: 'true'
+          PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
+          ENV_FILE: ${{ needs.resolve.outputs.env_file }}
+          COMMAND: ${{ needs.resolve.outputs.command }}
+        run: |
+          set -euo pipefail
+          MANUAL_ACCOUNT_PASSWORD=$(node -e 'process.stdout.write(String(require(process.env.GITHUB_EVENT_PATH).client_payload.password || ""))')
+          echo "::add-mask::${MANUAL_ACCOUNT_PASSWORD}"
+          MANUAL_ACCOUNT_EMAIL=$(node -e 'process.stdout.write(String(require(process.env.GITHUB_EVENT_PATH).client_payload.email || ""))')
+          # Not a secret, but half of a PROD credential pair, and the expected
+          # failures (onboarding not skipped, no practice history) name it.
+          echo "::add-mask::${MANUAL_ACCOUNT_EMAIL}"
+          export MANUAL_ACCOUNT_EMAIL MANUAL_ACCOUNT_PASSWORD
+          # The E2E roster has no PROD entry; accounts.ts throws on one it lacks.
+          unset E2E_ENV
+          if [ -n "$ENV_FILE" ]; then cp "$ENV_FILE" .env; fi
+          $COMMAND
+
+      - name: Build the versioned manual
+        id: build
+        working-directory: app
+        env:
+          # build-manual.mjs imports a .ts helper; stripping is the default from
+          # Node 22.18, the flag covers an older 22.x in the image.
+          NODE_OPTIONS: --experimental-strip-types
+          BUILD: ${{ needs.resolve.outputs.build }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: $BUILD "$TAG"
+
+      # Straight from this job: an artifact in a PUBLIC repository is
+      # downloadable by anyone, and the screenshots show the private product.
+      - name: Attach to the release
+        id: upload
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          TARGET: ${{ needs.resolve.outputs.owner }}/${{ needs.resolve.outputs.repo }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          ASSET: ${{ needs.resolve.outputs.asset }}
+        run: node ../runner/scripts/upload-release-asset.mjs "$TARGET" "$TAG" "$ASSET"
+
+  finalize:
+    needs: [resolve, manual]
+    if: ${{ always() && needs.resolve.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mint token
+        id: mint
+        uses: ./.github/actions/mint-token
+        with:
+          app-id: ${{ secrets.E2E_APP_ID }}
+          app-private-key: ${{ secrets.E2E_APP_PRIVATE_KEY }}
+          pat: ${{ secrets.ACTION_TOKEN }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+
+      - name: Decide the status
+        id: verdict
+        env:
+          RESOLVE: ${{ needs.resolve.result }}
+          MANUAL: ${{ needs.manual.result }}
+          GENERATED: ${{ needs.manual.outputs.generated }}
+          UPLOADED: ${{ needs.manual.outputs.uploaded }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$RESOLVE" != success ]; then
+            state=error; desc="PROD deploy of ${TAG} not confirmed — manual not generated"
+          elif [ "$UPLOADED" != success ]; then
+            state=failure; desc="manual for ${TAG} not attached (job: ${MANUAL})"
+          elif [ "$GENERATED" != success ]; then
+            state=failure; desc="manual for ${TAG} attached WITHOUT the modules that failed"
+          else
+            state=success; desc="manual for ${TAG} attached to the release"
+          fi
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+          echo "description=${desc}" >> "$GITHUB_OUTPUT"
+          echo "${state}: ${desc}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Status
+        uses: ./.github/actions/write-status
+        with:
+          token: ${{ steps.mint.outputs.token }}
+          owner: ${{ needs.resolve.outputs.owner }}
+          repo: ${{ needs.resolve.outputs.repo }}
+          sha: ${{ needs.resolve.outputs.sha }}
+          state: ${{ steps.verdict.outputs.state }}
+          context: ${{ needs.resolve.outputs.status_context }}
+          target-url: ${{ env.RUN_URL }}
+          description: ${{ steps.verdict.outputs.description }}
