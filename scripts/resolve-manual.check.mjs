@@ -45,4 +45,17 @@ rejects({ tag: 'for-other-v1.2.3' }, /tag/)
 rejects({ email: '' }, /email/)
 rejects({ password: '' }, /password/)
 
+// The teacher account is optional, but never half of a pair, and like the
+// student's it must stay out of the outputs.
+const withTeacher = resolveManual(
+  { ...ok, teacherEmail: 't@x.com', teacherPassword: 'tsecret' },
+  profiles,
+)
+assert.equal(withTeacher.has_teacher, 'true')
+assert.ok(!JSON.stringify(withTeacher).includes('tsecret'))
+assert.ok(!JSON.stringify(withTeacher).includes('t@x.com'))
+assert.equal(r.has_teacher, 'false')
+rejects({ teacherEmail: 't@x.com' }, /teacher/)
+rejects({ teacherPassword: 'tsecret' }, /teacher/)
+
 console.log('resolve-manual.check: ok')

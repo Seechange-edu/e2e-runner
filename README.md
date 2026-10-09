@@ -137,7 +137,9 @@ public repository are downloadable by anyone.
     "sha": "<40 hex>",
     "tag": "v1.2.3",
     "email": "<manual account email>",
-    "password": "<manual account password>"
+    "password": "<manual account password>",
+    "teacherEmail": "<optional: the teacher manual account>",
+    "teacherPassword": "<optional: both or neither>"
   }
 }
 ```
@@ -147,7 +149,8 @@ GitHub does not mask it on its own. Only the "Generate the manual" step reads
 it, straight from `$GITHUB_EVENT_PATH`, and `::add-mask::`s it first. Never put
 `client_payload` in `env:`, in `${{ }}` inside `run:`, in an output or in a
 debug print. The private repo keeps it as a secret
-(`MANUAL_ACCOUNT_PASSWORD`, email in variable `MANUAL_ACCOUNT_EMAIL`).
+(`MANUAL_ACCOUNT_PASSWORD`, email in variable `MANUAL_ACCOUNT_EMAIL`; the teacher
+account likewise as `MANUAL_TEACHER_PASSWORD` / `MANUAL_TEACHER_EMAIL`).
 
 Profile fields (`profiles.json` → `manual`): `statusContext`, `timeoutMinutes`,
 `envFile` (copied to `.env`), `command`, `build` (the tag is appended), `asset`

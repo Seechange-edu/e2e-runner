@@ -33,6 +33,12 @@ export function resolveManual(payload, profiles) {
   if (!TAG_RE.test(tag)) throw new Error(`tag must look like v1.2.3, got '${tag}'`)
   if (!text(payload.email)) throw new Error('email is missing from the payload')
   if (!text(payload.password)) throw new Error('password is missing from the payload')
+  // The teacher chapters: optional, but a half pair is a mistake worth naming.
+  // Only their presence leaves this script, never the values.
+  const hasTeacher = Boolean(text(payload.teacherEmail) && text(payload.teacherPassword))
+  if (Boolean(text(payload.teacherEmail)) !== Boolean(text(payload.teacherPassword))) {
+    throw new Error('teacher account needs both teacherEmail and teacherPassword')
+  }
 
   const m = profile.manual
   return {
@@ -40,6 +46,7 @@ export function resolveManual(payload, profiles) {
     repo,
     sha,
     tag,
+    has_teacher: String(hasTeacher),
     profile_id: profile.id,
     container: profile.container || '',
     install: profile.install || '',

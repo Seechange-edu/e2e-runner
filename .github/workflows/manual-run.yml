@@ -8,7 +8,7 @@ name: User manual
 # finalize sends `e2e-result`, which DEPLOYS PROD, and shares its concurrency
 # group with the release gate.
 #
-# 🔴🔴 client_payload.password is the manual account's PROD password, and this
+# 🔴🔴 client_payload.password (and teacherPassword) are the manual accounts' PROD passwords, and this
 # repository's logs are PUBLIC. It is not a secret here, so GitHub does not mask
 # it on its own. Rules for every edit to this file:
 #   - only the "Generate the manual" step reads it, from $GITHUB_EVENT_PATH,
@@ -211,6 +211,17 @@ jobs:
           # failures (onboarding not skipped, no practice history) name it.
           echo "::add-mask::${MANUAL_ACCOUNT_EMAIL}"
           export MANUAL_ACCOUNT_EMAIL MANUAL_ACCOUNT_PASSWORD
+          # The teacher chapters' account: optional (an empty value masks
+          # nothing, and the chapters then fail on their own missing variables).
+          MANUAL_TEACHER_PASSWORD=$(node -e 'process.stdout.write(String(require(process.env.GITHUB_EVENT_PATH).client_payload.teacherPassword || ""))')
+          if [ -n "$MANUAL_TEACHER_PASSWORD" ]; then
+            echo "::add-mask::${MANUAL_TEACHER_PASSWORD}"
+          fi
+          MANUAL_TEACHER_EMAIL=$(node -e 'process.stdout.write(String(require(process.env.GITHUB_EVENT_PATH).client_payload.teacherEmail || ""))')
+          if [ -n "$MANUAL_TEACHER_EMAIL" ]; then
+            echo "::add-mask::${MANUAL_TEACHER_EMAIL}"
+          fi
+          export MANUAL_TEACHER_EMAIL MANUAL_TEACHER_PASSWORD
           # The E2E roster has no PROD entry; accounts.ts throws on one it lacks.
           unset E2E_ENV
           if [ -n "$ENV_FILE" ]; then cp "$ENV_FILE" .env; fi
