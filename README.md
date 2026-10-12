@@ -118,8 +118,9 @@ deploys PROD). The private repo dispatches it after a PROD deploy
 2. waits until the public deploy repository has a green run for the tag (the
    private repo's deploy only hands the tag over);
 3. checks out the tag, runs `yarn manual` against PROD as the dedicated manual
-   account, builds `ThinkAndSpeak-User-Manual-<tag>.pdf`, and attaches it to
-   the private repo's GitHub Release for that tag
+   account, builds `ThinkAndSpeak-User-Manual-<tag>[.<lang>].pdf` (one per
+   language: English, zh-HK, zh-CN), and attaches them to the private repo's
+   GitHub Release for that tag
    ([`scripts/upload-release-asset.mjs`](scripts/upload-release-asset.mjs),
    same-name asset replaced);
 4. writes the final status. It sends **no** callback.

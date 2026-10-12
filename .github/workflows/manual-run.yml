@@ -248,7 +248,20 @@ jobs:
           TARGET: ${{ needs.resolve.outputs.owner }}/${{ needs.resolve.outputs.repo }}
           TAG: ${{ needs.resolve.outputs.tag }}
           ASSET: ${{ needs.resolve.outputs.asset }}
-        run: node ../runner/scripts/upload-release-asset.mjs "$TARGET" "$TAG" "$ASSET"
+        run: |
+          set -euo pipefail
+          # One PDF per language: ThinkAndSpeak-User-Manual-<tag>[.<lang>].pdf.
+          # The pattern comes from profiles.json and the tag is validated, so
+          # the unquoted expansion only ever globs.
+          shopt -s nullglob
+          files=($ASSET)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::nothing matches ${ASSET}"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            node ../runner/scripts/upload-release-asset.mjs "$TARGET" "$TAG" "$f"
+          done
 
   finalize:
     needs: [resolve, manual]
