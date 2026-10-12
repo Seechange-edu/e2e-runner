@@ -52,6 +52,7 @@ jobs:
       command: ${{ steps.rp.outputs.command }}
       build: ${{ steps.rp.outputs.build }}
       asset: ${{ steps.rp.outputs.asset }}
+      full: ${{ steps.rp.outputs.full }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,6 +127,9 @@ jobs:
     outputs:
       generated: ${{ steps.gen.outcome }}
       uploaded: ${{ steps.upload.outcome }}
+      mode: ${{ steps.decide.outputs.mode }}
+      regenerated: ${{ steps.decide.outputs.regenerated }}
+      total: ${{ steps.decide.outputs.total }}
     steps:
       - name: Checkout runner
         uses: actions/checkout@v4
@@ -149,6 +153,9 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha }}
           token: ${{ steps.mint.outputs.token }}
           path: app
+          # The previous release's tag is diffed against this one.
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
       - name: Enable Yarn 1.22.22
@@ -186,6 +193,57 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
         run: ${{ needs.resolve.outputs.install }}
 
+      # The manual only regenerates what a release changed: the modules of the
+      # previous release's pack are the starting point, and only the affected
+      # ones are run again. No previous pack (the first run, an old release
+      # nobody built a manual for) is simply a full run.
+      - name: Find the previous manual
+        id: previous
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.token }}
+          TARGET: ${{ needs.resolve.outputs.owner }}/${{ needs.resolve.outputs.repo }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          found=""
+          if out=$(node ../runner/scripts/download-release-asset.mjs "$TARGET" "$TAG" "$RUNNER_TEMP/previous-modules.tar.gz"); then
+            found="$out"
+          else
+            echo "::warning::could not read the previous manual; regenerating everything"
+          fi
+          if [ -n "$found" ]; then
+            mkdir -p manual-output
+            tar -xzf "$RUNNER_TEMP/previous-modules.tar.gz" -C manual-output
+            echo "tag=$(node -p 'JSON.parse(process.argv[1]).tag' "$found")" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # scripts/manual-affected.mjs of the target decides (what each module
+      # shows is its own knowledge). Any trouble deciding is a full run.
+      - name: Decide what to regenerate
+        id: decide
+        working-directory: app
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+          FULL: ${{ needs.resolve.outputs.full }}
+        run: |
+          set -euo pipefail
+          args=(--tag "$TAG" --github-output)
+          if [ -n "$PREVIOUS" ]; then
+            args+=(--previous "$PREVIOUS" --have-dir manual-output)
+          fi
+          if [ "$FULL" = true ]; then
+            args+=(--full)
+          fi
+          if ! node scripts/manual-affected.mjs "${args[@]}" > "$RUNNER_TEMP/decision.json"; then
+            echo "::warning::could not decide what changed; regenerating everything"
+            node scripts/manual-affected.mjs --tag "$TAG" --full --github-output > "$RUNNER_TEMP/decision.json"
+          fi
+          node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); console.log(`${d.mode}: ${d.modules.length} of ${d.total} module(s) — ${d.reason}`)' "$RUNNER_TEMP/decision.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
       # continue-on-error: a module that fails (e.g. Word List on an account
       # with no practice history) writes no README and is left out of the PDF;
       # the rest still ship. finalize reports the failure on the commit.
@@ -195,6 +253,9 @@ jobs:
       # Never `set -x` here.
       - name: Generate the manual
         id: gen
+        # Nothing to regenerate (no change shows on a screenshot): the documents
+        # are only rebuilt from the previous pack.
+        if: ${{ steps.decide.outputs.mode == 'all' || steps.decide.outputs.files != '' }}
         continue-on-error: true
         working-directory: app
         env:
@@ -202,6 +263,8 @@ jobs:
           PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev
           ENV_FILE: ${{ needs.resolve.outputs.env_file }}
           COMMAND: ${{ needs.resolve.outputs.command }}
+          MODE: ${{ steps.decide.outputs.mode }}
+          FILES: ${{ steps.decide.outputs.files }}
         run: |
           set -euo pipefail
           MANUAL_ACCOUNT_PASSWORD=$(node -e 'process.stdout.write(String(require(process.env.GITHUB_EVENT_PATH).client_payload.password || ""))')
@@ -225,7 +288,14 @@ jobs:
           # The E2E roster has no PROD entry; accounts.ts throws on one it lacks.
           unset E2E_ENV
           if [ -n "$ENV_FILE" ]; then cp "$ENV_FILE" .env; fi
-          $COMMAND
+          if [ "$MODE" = all ]; then
+            # A whole run: nothing of the previous pack may survive it.
+            rm -rf manual-output
+            $COMMAND
+          else
+            # shellcheck disable=SC2086 -- repo paths from the target's own scripts
+            $COMMAND $FILES
+          fi
 
       - name: Build the versioned manual
         id: build
@@ -236,7 +306,7 @@ jobs:
           NODE_OPTIONS: --experimental-strip-types
           BUILD: ${{ needs.resolve.outputs.build }}
           TAG: ${{ needs.resolve.outputs.tag }}
-        run: $BUILD "$TAG"
+        run: $BUILD "$TAG" --pack
 
       # Straight from this job: an artifact in a PUBLIC repository is
       # downloadable by anyone, and the screenshots show the private product.
@@ -258,6 +328,11 @@ jobs:
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::nothing matches ${ASSET}"
             exit 1
+          fi
+          # The modules the next release builds on.
+          pack="manual-output/ThinkAndSpeak-Manual-Modules-${TAG}.tar.gz"
+          if [ -f "$pack" ]; then
+            files+=("$pack")
           fi
           for f in "${files[@]}"; do
             node ../runner/scripts/upload-release-asset.mjs "$TARGET" "$TAG" "$f"
@@ -287,6 +362,9 @@ jobs:
           MANUAL: ${{ needs.manual.result }}
           GENERATED: ${{ needs.manual.outputs.generated }}
           UPLOADED: ${{ needs.manual.outputs.uploaded }}
+          MODE: ${{ needs.manual.outputs.mode }}
+          REGENERATED: ${{ needs.manual.outputs.regenerated }}
+          TOTAL: ${{ needs.manual.outputs.total }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
@@ -294,10 +372,11 @@ jobs:
             state=error; desc="PROD deploy of ${TAG} not confirmed — manual not generated"
           elif [ "$UPLOADED" != success ]; then
             state=failure; desc="manual for ${TAG} not attached (job: ${MANUAL})"
-          elif [ "$GENERATED" != success ]; then
+          elif [ "$GENERATED" = failure ]; then
+            # `skipped` is a run with nothing to regenerate, not a failure.
             state=failure; desc="manual for ${TAG} attached WITHOUT the modules that failed"
           else
-            state=success; desc="manual for ${TAG} attached to the release"
+            state=success; desc="manual for ${TAG} attached (${MODE}: regenerated ${REGENERATED} of ${TOTAL} modules)"
           fi
           echo "state=${state}" >> "$GITHUB_OUTPUT"
           echo "description=${desc}" >> "$GITHUB_OUTPUT"

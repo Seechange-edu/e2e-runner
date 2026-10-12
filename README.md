@@ -125,6 +125,13 @@ deploys PROD). The private repo dispatches it after a PROD deploy
    same-name asset replaced);
 4. writes the final status. It sends **no** callback.
 
+Only what a release changed is regenerated: the run downloads the previous
+release's `ThinkAndSpeak-Manual-Modules-<tag>.tar.gz` ([`scripts/download-release-asset.mjs`](scripts/download-release-asset.mjs)),
+the target's own `scripts/manual-affected.mjs` decides which modules to run
+(`vX.0.0`, the `full` flag of the payload, no previous pack or an unknown path
+is a full run), and the new pack is attached beside the PDFs. The `full` flag
+comes from the frontend's **User manual** workflow.
+
 A module that fails is left out of the PDF and turns the status to `failure`;
 the rest still ship. Nothing is uploaded as a workflow artifact: artifacts of a
 public repository are downloadable by anyone.
@@ -140,7 +147,8 @@ public repository are downloadable by anyone.
     "email": "<manual account email>",
     "password": "<manual account password>",
     "teacherEmail": "<optional: the teacher manual account>",
-    "teacherPassword": "<optional: both or neither>"
+    "teacherPassword": "<optional: both or neither>",
+    "full": false
   }
 }
 ```

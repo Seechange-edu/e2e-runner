@@ -58,4 +58,12 @@ assert.equal(r.has_teacher, 'false')
 rejects({ teacherEmail: 't@x.com' }, /teacher/)
 rejects({ teacherPassword: 'tsecret' }, /teacher/)
 
+// `full` is the switch of the frontend's manual workflow: a plain boolean, and
+// anything but a real `true` is not a request to regenerate everything.
+assert.equal(r.full, 'false')
+assert.equal(resolveManual({ ...ok, full: true }, profiles).full, 'true')
+assert.equal(resolveManual({ ...ok, full: 'true' }, profiles).full, 'true')
+assert.equal(resolveManual({ ...ok, full: 'yes please' }, profiles).full, 'false')
+assert.equal(resolveManual({ ...ok, full: undefined }, profiles).full, 'false')
+
 console.log('resolve-manual.check: ok')

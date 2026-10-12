@@ -47,6 +47,8 @@ export function resolveManual(payload, profiles) {
     sha,
     tag,
     has_teacher: String(hasTeacher),
+    // The switch of the frontend's manual workflow: regenerate every module.
+    full: String(payload.full === true || text(payload.full) === 'true'),
     profile_id: profile.id,
     container: profile.container || '',
     install: profile.install || '',
