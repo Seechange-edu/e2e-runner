@@ -105,6 +105,69 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
   `backend-release-cut` is rejected.
 - Unknown `owner/repo` fails **before** checkout.
 
+## User manual (`manual-run`)
+
+[`.github/workflows/manual-run.yml`](.github/workflows/manual-run.yml) — a
+separate workflow, not a mode of `e2e-run.yml` (whose `e2e-result` callback
+deploys PROD). The private repo dispatches it after a PROD deploy
+(think-and-speak-frontend: `PROD_k8s.yaml`). It:
+
+1. validates the payload against the profile's `manual` block
+   ([`scripts/resolve-manual.mjs`](scripts/resolve-manual.mjs)) and writes a
+   pending `manual/user-manual` status on the SHA;
+2. waits until the public deploy repository has a green run for the tag (the
+   private repo's deploy only hands the tag over);
+3. checks out the tag, runs `yarn manual` against PROD as the dedicated manual
+   account, builds `ThinkAndSpeak-User-Manual-<tag>[.<lang>].pdf` (one per
+   language: English, zh-HK, zh-CN), and attaches them to the private repo's
+   GitHub Release for that tag
+   ([`scripts/upload-release-asset.mjs`](scripts/upload-release-asset.mjs),
+   same-name asset replaced);
+4. writes the final status. It sends **no** callback.
+
+Only what a release changed is regenerated: the run downloads the previous
+release's `ThinkAndSpeak-Manual-Modules-<tag>.tar.gz` ([`scripts/download-release-asset.mjs`](scripts/download-release-asset.mjs)),
+the target's own `scripts/manual-affected.mjs` decides which modules to run
+(`vX.0.0`, the `full` flag of the payload, no previous pack or an unknown path
+is a full run), and the new pack is attached beside the PDFs. The `full` flag
+comes from the frontend's **User manual** workflow.
+
+A module that fails is left out of the PDF and turns the status to `failure`;
+the rest still ship. Nothing is uploaded as a workflow artifact: artifacts of a
+public repository are downloadable by anyone.
+
+```json
+{
+  "event_type": "manual-run",
+  "client_payload": {
+    "owner": "Seechange-edu",
+    "repo": "think-and-speak-frontend",
+    "sha": "<40 hex>",
+    "tag": "v1.2.3",
+    "email": "<manual account email>",
+    "password": "<manual account password>",
+    "teacherEmail": "<optional: the teacher manual account>",
+    "teacherPassword": "<optional: both or neither>",
+    "full": false
+  }
+}
+```
+
+🔴 `password` is a PROD password inside a payload, and these logs are public.
+GitHub does not mask it on its own. Only the "Generate the manual" step reads
+it, straight from `$GITHUB_EVENT_PATH`, and `::add-mask::`s it first. Never put
+`client_payload` in `env:`, in `${{ }}` inside `run:`, in an output or in a
+debug print. The private repo keeps it as a secret
+(`MANUAL_ACCOUNT_PASSWORD`, email in variable `MANUAL_ACCOUNT_EMAIL`; the teacher
+account likewise as `MANUAL_TEACHER_PASSWORD` / `MANUAL_TEACHER_EMAIL`).
+
+Profile fields (`profiles.json` → `manual`): `statusContext`, `timeoutMinutes`,
+`envFile` (copied to `.env`), `command`, `build` (the tag is appended), `asset`
+(`{tag}` is replaced), `deployRepo` + `deployPrefix` (the deploy run's branch is
+`<deployPrefix><tag>/<timestamp>`).
+
+`node scripts/resolve-manual.check.mjs` checks the payload validation.
+
 ## Credentials (`ACTION_TOKEN`, no GitHub App)
 
 Both sides reuse the **existing org `ACTION_TOKEN`** (already used by frontend
