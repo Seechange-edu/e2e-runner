@@ -14,7 +14,10 @@ import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
-const PACK = /^ThinkAndSpeak-Manual-Modules-.+\.tar\.gz$/
+// ponytail: the ThinkAndSpeak- prefix only covers packs built before the rename
+// (up to v3.14.1); once no release in the list carries one, drop it.
+export const PACK =
+  /^(?:AI-English-GYM|ThinkAndSpeak)-Manual-Modules-.+\.tar\.gz$/
 
 /**
  * `releases` newest first, as the API lists them. The previous pack is the

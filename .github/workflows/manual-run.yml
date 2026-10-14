@@ -320,7 +320,8 @@ jobs:
           ASSET: ${{ needs.resolve.outputs.asset }}
         run: |
           set -euo pipefail
-          # One PDF per language: ThinkAndSpeak-User-Manual-<tag>[.<lang>].pdf.
+          # One PDF per language: AI-English-GYM-User-Manual-<tag>[.<lang>].pdf
+          # (ThinkAndSpeak-… for a tag built before the rename).
           # The pattern comes from profiles.json and the tag is validated, so
           # the unquoted expansion only ever globs.
           shopt -s nullglob
@@ -329,11 +330,12 @@ jobs:
             echo "::error::nothing matches ${ASSET}"
             exit 1
           fi
-          # The modules the next release builds on.
-          pack="manual-output/ThinkAndSpeak-Manual-Modules-${TAG}.tar.gz"
-          if [ -f "$pack" ]; then
+          # The modules the next release builds on:
+          # AI-English-GYM-Manual-Modules-<tag>.tar.gz, or ThinkAndSpeak-… for a
+          # tag built before the rename. nullglob: no match adds nothing.
+          for pack in manual-output/*-Manual-Modules-"${TAG}".tar.gz; do
             files+=("$pack")
-          fi
+          done
           for f in "${files[@]}"; do
             node ../runner/scripts/upload-release-asset.mjs "$TARGET" "$TAG" "$f"
           done
