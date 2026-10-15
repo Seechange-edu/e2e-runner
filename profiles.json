@@ -28,7 +28,7 @@
         "envFile": "env/prod.env",
         "command": "yarn manual",
         "build": "node scripts/build-manual.mjs --lang all --version",
-        "asset": "manual-output/ThinkAndSpeak-User-Manual-{tag}*.pdf",
+        "asset": "manual-output/*User-Manual-{tag}*.pdf",
         "deployRepo": "Seechange-edu/act-speaking-exercise-frontend",
         "deployPrefix": "think-and-speak-frontend/"
       }
