@@ -48,6 +48,23 @@
         "deployRepo": "Seechange-edu/act-nexus-ai-frontend",
         "deployPrefix": "Nexus-AI/"
       }
+    },
+    {
+      "id": "cms-frontend",
+      "owner": "Seechange-edu",
+      "repo": "cms-frontend",
+      "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
+      "install": "yarn install --frozen-lockfile",
+      "yarnCache": "yarn.lock",
+      "manual": {
+        "statusContext": "manual/user-manual",
+        "timeoutMinutes": 30,
+        "command": "yarn manual",
+        "build": "node scripts/build-manual.mjs --lang all --version",
+        "asset": "manual-output/*User-Manual-{tag}*.html manual-output/*User-Manual-{tag}*.pdf",
+        "deployRepo": "Seechange-edu/cms-frontend-action-factory",
+        "deployPrefix": "cms-frontend/"
+      }
     }
   ]
 }

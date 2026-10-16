@@ -110,7 +110,8 @@ Bump the tag in `profiles.json` when the private repo bumps Playwright.
 [`.github/workflows/manual-run.yml`](.github/workflows/manual-run.yml) — a
 separate workflow, not a mode of `e2e-run.yml` (whose `e2e-result` callback
 deploys PROD). The private repo dispatches it after a PROD deploy
-(think-and-speak-frontend: `PROD_k8s.yaml`; Nexus-AI: `prod.yml`). It:
+(think-and-speak-frontend: `PROD_k8s.yaml`; Nexus-AI: `prod.yml`;
+cms-frontend: `PROD-docker.yaml`). It:
 
 1. validates the payload against the profile's `manual` block
    ([`scripts/resolve-manual.mjs`](scripts/resolve-manual.mjs)) and writes a
@@ -120,7 +121,8 @@ deploys PROD). The private repo dispatches it after a PROD deploy
 3. checks out the tag, runs the profile's manual command against PROD as the
    dedicated manual account, builds `<Product>-User-Manual-<tag>[.<lang>].html`
    and its `.pdf` (one pair per language: English, zh-HK, zh-CN;
-   `AI-English-GYM-…` for TNS, `SCALE-…` for Nexus-AI), and attaches them
+   `AI-English-GYM-…` for TNS, `SCALE-…` for Nexus-AI,
+   `All-in-One-Platform-…` for cms-frontend), and attaches them
    to the private repo's GitHub Release for that tag
    ([`scripts/upload-release-asset.mjs`](scripts/upload-release-asset.mjs),
    same-name asset replaced);
@@ -167,9 +169,9 @@ Profile fields (`profiles.json` → `manual`): `statusContext`, `timeoutMinutes`
 (`{tag}` is replaced), `deployRepo` + `deployPrefix` (the deploy run's branch is
 `<deployPrefix><tag>/<timestamp>`).
 
-A profile may be manual-only (`nexus-ai`: `owner`, `repo`, `container`,
-`install` and the `manual` block, nothing for `e2e-run`): such a repository
-must never dispatch `e2e-run`. The target's manual tooling lives at its
+A profile may be manual-only (`nexus-ai`, `cms-frontend`: `owner`, `repo`,
+`container`, `install` and the `manual` block, nothing for `e2e-run`): such a
+repository must never dispatch `e2e-run`. The target's manual tooling lives at its
 repository root (`scripts/manual-affected.mjs`, `manual-output/`), whatever
 the layout of the app itself — Nexus-AI keeps the app in `frontend/`.
 
