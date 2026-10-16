@@ -118,9 +118,9 @@ deploys PROD). The private repo dispatches it after a PROD deploy
 2. waits until the public deploy repository has a green run for the tag (the
    private repo's deploy only hands the tag over);
 3. checks out the tag, runs `yarn manual` against PROD as the dedicated manual
-   account, builds `AI-English-GYM-User-Manual-<tag>[.<lang>].pdf` (one per
-   language: English, zh-HK, zh-CN), and attaches them to the private repo's
-   GitHub Release for that tag
+   account, builds `AI-English-GYM-User-Manual-<tag>[.<lang>].html` and its
+   `.pdf` (one pair per language: English, zh-HK, zh-CN), and attaches them
+   to the private repo's GitHub Release for that tag
    ([`scripts/upload-release-asset.mjs`](scripts/upload-release-asset.mjs),
    same-name asset replaced);
 4. writes the final status. It sends **no** callback.
@@ -129,10 +129,10 @@ Only what a release changed is regenerated: the run downloads the previous
 release's `AI-English-GYM-Manual-Modules-<tag>.tar.gz` (`ThinkAndSpeak-…` for a tag built before the rename; [`scripts/download-release-asset.mjs`](scripts/download-release-asset.mjs)),
 the target's own `scripts/manual-affected.mjs` decides which modules to run
 (`vX.0.0`, the `full` flag of the payload, no previous pack or an unknown path
-is a full run), and the new pack is attached beside the PDFs. The `full` flag
+is a full run), and the new pack is attached beside the pages and PDFs. The `full` flag
 comes from the frontend's **User manual** workflow.
 
-A module that fails is left out of the PDF and turns the status to `failure`;
+A module that fails is left out of the page and PDF and turns the status to `failure`;
 the rest still ship. Nothing is uploaded as a workflow artifact: artifacts of a
 public repository are downloadable by anyone.
 
