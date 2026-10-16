@@ -14,10 +14,10 @@ import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
-// ponytail: the ThinkAndSpeak- prefix only covers packs built before the rename
-// (up to v3.14.1); once no release in the list carries one, drop it.
-export const PACK =
-  /^(?:AI-English-GYM|ThinkAndSpeak)-Manual-Modules-.+\.tar\.gz$/
+// Any product's pack: <Product>-Manual-Modules-<tag>.tar.gz (AI-English-GYM,
+// SCALE; ThinkAndSpeak for a TNS tag built before its rename). A release only
+// ever carries its own product's pack, so the prefix needs no check.
+export const PACK = /^[A-Za-z0-9-]+-Manual-Modules-.+\.tar\.gz$/
 
 /**
  * `releases` newest first, as the API lists them. The previous pack is the
