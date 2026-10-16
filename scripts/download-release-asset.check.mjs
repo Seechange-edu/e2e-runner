@@ -36,7 +36,8 @@ assert.equal(pickPrevious([], 'v3.13.1', PACK), null)
 assert.ok(PACK.test(pack('v3.14.2')))
 assert.ok(PACK.test(oldPack('v3.14.1')))
 assert.ok(!PACK.test('AI-English-GYM-User-Manual-v3.14.2.pdf'))
-assert.ok(!PACK.test('Other-Manual-Modules-v3.14.2.tar.gz'))
+assert.ok(PACK.test('SCALE-Manual-Modules-v1.2.3.tar.gz'))
+assert.ok(!PACK.test('SCALE-User-Manual-v1.2.3.zh-HK.html'))
 // A draft is not a release anyone built on.
 assert.equal(
   pickPrevious([rel('v2', [pack('v2')], true), rel('v1', [pack('v1')])], 'v3', PACK).release.tag_name,

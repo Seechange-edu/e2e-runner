@@ -1,8 +1,9 @@
 name: User manual
 
 # Regenerates a private repository's end-user manual against PROD and attaches
-# the PDF to that repository's GitHub Release for the tag. Dispatched by the
-# private repo after a PROD deploy (think-and-speak-frontend: PROD_k8s.yaml).
+# the page and PDF to that repository's GitHub Release for the tag. Dispatched
+# by the private repo after a PROD deploy (think-and-speak-frontend:
+# PROD_k8s.yaml; Nexus-AI: prod.yml).
 #
 # A separate workflow on purpose, not a mode of e2e-run.yml: that one's
 # finalize sends `e2e-result`, which DEPLOYS PROD, and shares its concurrency
@@ -321,8 +322,9 @@ jobs:
         run: |
           set -euo pipefail
           # The page and its PDF per language:
-          # AI-English-GYM-User-Manual-<tag>[.<lang>].html and .pdf
-          # (ThinkAndSpeak-… for a tag built before the rename).
+          # <Product>-User-Manual-<tag>[.<lang>].html and .pdf
+          # (AI-English-GYM, SCALE; ThinkAndSpeak-… for a TNS tag built before
+          # the rename).
           # The pattern comes from profiles.json and the tag is validated, so
           # the unquoted expansion only ever globs.
           shopt -s nullglob
@@ -332,8 +334,7 @@ jobs:
             exit 1
           fi
           # The modules the next release builds on:
-          # AI-English-GYM-Manual-Modules-<tag>.tar.gz, or ThinkAndSpeak-… for a
-          # tag built before the rename. nullglob: no match adds nothing.
+          # <Product>-Manual-Modules-<tag>.tar.gz. nullglob: no match adds nothing.
           for pack in manual-output/*-Manual-Modules-"${TAG}".tar.gz; do
             files+=("$pack")
           done

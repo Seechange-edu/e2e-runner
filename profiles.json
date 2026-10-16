@@ -32,6 +32,22 @@
         "deployRepo": "Seechange-edu/act-speaking-exercise-frontend",
         "deployPrefix": "think-and-speak-frontend/"
       }
+    },
+    {
+      "id": "nexus-ai",
+      "owner": "Seechange-edu",
+      "repo": "Nexus-AI",
+      "container": "mcr.microsoft.com/playwright:v1.57.0-jammy",
+      "install": "npm ci --ignore-scripts",
+      "manual": {
+        "statusContext": "manual/user-manual",
+        "timeoutMinutes": 30,
+        "command": "npm run manual --",
+        "build": "node scripts/build-manual.mjs --lang all --version",
+        "asset": "manual-output/*User-Manual-{tag}*.html manual-output/*User-Manual-{tag}*.pdf",
+        "deployRepo": "Seechange-edu/act-nexus-ai-frontend",
+        "deployPrefix": "Nexus-AI/"
+      }
     }
   ]
 }
